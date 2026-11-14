@@ -1,0 +1,6 @@
+pyobjc-core==13.0
+pyobjc-framework-Cocoa==13.0
+pyobjc-framework-Quartz==13.0
+certifi==2026.10.23
+py2app==0.28.10
+setuptools<81
