@@ -15,7 +15,7 @@ class SettingsMigrationTests(unittest.TestCase):
                 self.assertEqual(settings['offset'], expected)
                 self.assertEqual(settings['x'], 51)
                 self.assertEqual(settings['font_size'], 42)
-                self.assertEqual(settings['lyric_style'], 'Ransom Note')
+                self.assertEqual(settings['lyric_style'], 'Kinetic Word')
                 settings['show_progress'] = False
                 settings['layout'] = 'Lyrics only'
                 settings.save()

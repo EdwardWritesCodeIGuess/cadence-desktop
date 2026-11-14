@@ -25,6 +25,10 @@ def fetch(url, params=None, binary=False):
 
 
 def lyrics(track):
+    from .apple_lyrics import apple_lyrics
+    local, source = apple_lyrics(track)
+    if local:
+        return local, source
     CACHE.mkdir(parents=True, exist_ok=True)
     path = CACHE / (hashlib.sha256(repr(track.key).encode()).hexdigest() + '.json')
     try:

@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 from bisect import bisect_right
 import re
 import unicodedata
+from .motion import PlaybackClock
 
 @dataclass(frozen=True)
 class Track:
@@ -109,9 +110,11 @@ class Playback:
         self.lines = []
         self.source = ''
         self.generation = 0
+        self.clock = PlaybackClock()
 
     def update(self, track):
         changed = track.key != self.track.key
+        self.clock.update(track)
         self.track = track
         if changed:
             self.generation += 1
@@ -119,11 +122,14 @@ class Playback:
             self.source = ''
         return changed
 
+    def position_at(self, now):
+        return self.clock.position_at(now)
+
     def accept(self, generation, lines, source):
         if generation != self.generation:
             return False
         def quality(label):
-            return 2 if label == 'Word-synced lyrics' else 0 if label.startswith('NetEase') else 1
+            return 4 if 'exact word' in label else 3 if label == 'Word-synced lyrics' else 2 if label.startswith('Apple Music') else 0 if label.startswith('NetEase') else 1
         if self.lines and (not lines or quality(self.source) > quality(source)):
             return False
         self.lines, self.source = lines, source

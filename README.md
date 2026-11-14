@@ -1,56 +1,48 @@
 # Cadence
 
-A movable Apple Music lyric widget that lives **above your wallpaper and below your app windows**. Written in Python with native AppKit rendering through PyObjC.
+A movable Apple Music lyric widget that lives **above your wallpaper and below your app windows**. Python with native AppKit rendering through PyObjC; a small Swift helper provides optional on-device Apple Intelligence.
 
-## What it does
+## New in v3
 
-- Reads the current song, artist, album, playback state and position directly from Apple Music via Apple Events.
-- Follows song changes, pauses and seeks. Old lyrics disappear on a track change; generation checks discard late responses for previous tracks.
-- Displays synced lyrics with word highlighting, neighboring lines, album artwork and progress.
-- Offers Aurora, Glass and transparent Typography looks; adjustable typeface, lyric size, width, height, backdrop opacity, accent color and timing offset.
-- Samples colors from album artwork. Optional gently moving aurora background.
-- Drag to move, right-click to customize, and lock the position for click-through behavior. Placement and appearance survive relaunches.
-- Uses one desktop-level window across Spaces. Does not cover normal app windows or the lock screen.
+- **Kinetic Word:** one large word at a time, with smooth crossfades and a squash/stretch pop inspired by the supplied video. **Stretch to fill** controls how much words expand independently across the widget's width and height. Turn **Neighboring words / lines** on for smaller surrounding words.
+- Continuous word highlights and a smoothed playback clock avoid resetting animation at every Music poll. Rendering follows the display at up to 60 fps. Ransom Note measures layouts separately from rasterization and prewarms upcoming cutouts.
+- **Widgets:** Wide lyrics, Square lyrics, Compact strip, Album card, and Clock + lyrics. These are movable layouts for the single Cadence desktop widget, not Apple WidgetKit extensions or multiple simultaneous widgets.
+- **Out of view:** when macOS reports the widget fully covered, it is hidden, or the display sleeps, Cadence pauses the display link and control timer and blocks its Music polling thread. It starts no new lyric/art requests while hidden. An existing network request can finish and cache its result; an active AI helper is cancelled. The app remains resident so it can resume on visibility changes.
+- **Better lyric sources:** read-only lookup of Apple Music's local syllable-lyrics cache, including exact word timestamps when present. Third-party providers remain fallbacks, and less precise late results cannot replace exact timing.
+- **Apple Intelligence:** an optional Timing-tab action cleans promotional decorations from song metadata to retry the catalogue lookup. Suggestions that change the artist, song, or version are rejected. It does not invent lyric text or word timestamps, and is not a Siri transcription integration.
+- **Lock screen:** a separate click-through panel can display lyrics near the bottom of the lock screen. The desktop window stays below app windows. Disable it under Layout if desired. This uses private SkyLight APIs adapted from Maestro, so macOS updates may affect compatibility.
 
-## Kinetic lyrics (v2)
-
-Eight independent lyric effects work with any backdrop:
+## Styles and customization
 
 | Effect | Motion |
 | --- | --- |
-| Ransom Note | Mixed letter cutouts on textured paper, with active-word pops |
-| Pop | Springy word highlights and capsules |
-| Spotlight | One large active word with nearby words above and below |
+| Kinetic Word | One large word, elastic fit, pop and crossfade |
+| Ransom Note | Cached, locally drawn letter cutouts on textured paper |
+| Pop | Smooth word highlights and capsules |
+| Spotlight | One large word with nearby words above and below |
 | Ribbon | A horizontal strip that follows each word |
-| Scroll | A vertical stack of lyric lines with a highlighted active phrase |
+| Scroll | A vertical stack of lyric lines |
 | Typewriter | Reveals the phrase word by word |
 | Neon | Glowing active words |
-| Wave | Gently undulating words with active-word emphasis |
+| Wave | Gently undulating words |
 
-Ransom Note is drawn locally and cached; it does not need external letter images.
-Effects controls include pop strength, animation speed, cutout variation, line spacing,
-neighbor visibility, typeface, alignment, and lyric size. **Layout → Lyrics only**
-removes the backdrop and all song/time/progress UI without losing individual choices.
-Full widget mode has separate switches for title, art, progress, elapsed time and the
-source label. Colors controls adjust text/accent colors and independent opacities.
+All effects work with Aurora, Glass, or transparent Typography backdrops. Controls include font, size, widget dimensions, colors, opacity, pop strength, speed, stretch, paper variation, line spacing, neighbors, alignment and timing offset. **Layout → Lyrics only** removes the backdrop and all other UI. Full widget mode has separate switches for title, art, progress, elapsed time and source. Settings and position persist.
 
-**Timing:** the default is +0.22 seconds (positive shows lyrics earlier). Existing
-custom nonzero offsets are retained. Earlier/Later buttons and menu actions nudge
-by 100 ms; Reset restores +0.22 seconds. The Timing tab identifies whether timestamps
-are real or estimated. A constant offset can address consistent latency, but cannot
-make estimated word timings exact. Both lyric providers still depend on coverage.
+Positive timing offsets show lyrics earlier. The default is +0.22 seconds; Earlier/Later actions nudge by 100 ms. Existing custom offsets are preserved. An offset can correct constant latency, but cannot make estimated word timing exact.
 
 ## Use
 
-Launch **Cadence.app**, allow it to control **Music** when macOS asks, then play a song in the native Apple Music app. The waveform menu-bar icon opens Customize, Refresh lyrics and position controls.
+Launch **Cadence.app**, allow it to control **Music**, then play a song in the native Apple Music app. The waveform menu-bar icon opens Customize, Refresh lyrics, and placement controls. Show the desktop to see the widget; drag it to move it and right-click to customize. Lock its position for click-through behavior.
 
-Show your desktop to see the widget. Drag anywhere on the widget to move it. If locked, unlock it from the menu bar or Customize window. Choose **Typography** for lyrics directly over your wallpaper, or lower **Backdrop opacity**. Close Customize when finished; Cadence stays in the menu bar.
+For the video-inspired look, select **Effects → Kinetic Word**, turn neighboring words off, and adjust **Stretch to fill**. Choose **Layout → Lyrics only** for text directly over the wallpaper. Widget layouts are in the **Widgets** tab.
 
-If Automation was denied: System Settings → Privacy & Security → Automation → Cadence → Music. The settings window shows the current connection status. Open Apple Music from the menu if it isn't running.
+Apple Music's lyrics cache must already contain the song. Opening that song's lyrics in Music may populate it; then use **Refresh lyrics** in Cadence. Otherwise Cadence uses LRCLIB and NetEase, identifying real versus estimated timestamps in Timing. Missing or instrumental lyrics get an explicit state, and stale results from previous songs are discarded.
+
+If Automation was denied: System Settings → Privacy & Security → Automation → Cadence → Music. The preferences window shows connection status. Cadence never launches Music merely to poll it.
 
 ## Build from source
 
-Requires macOS 14+ and Python 3.14. Developed and tested on Apple silicon with macOS 27.3; older supported versions have not been verified.
+Developed on Apple silicon, Python 3.14, macOS 27.3, and the macOS 27.2 SDK. The main app targets macOS 14+, but older releases have not been verified. Building the optional Apple Intelligence helper requires Xcode Command Line Tools with FoundationModels/Swift support; the bundled helper targets Apple silicon/macOS 26+. It requires Apple Intelligence enabled and its on-device model available.
 
 ```sh
 python3 -m venv .venv
@@ -61,30 +53,26 @@ codesign --force --deep --sign - dist/Cadence.app
 open dist/Cadence.app
 ```
 
-The built app bundles Python and dependencies; it does not need the source directory or virtual environment to run. To install, copy `dist/Cadence.app` to Applications. This local build is ad-hoc signed, not notarized.
+Copy `dist/Cadence.app` to Applications to install. Python and dependencies are bundled; the app does not need the source checkout or venv. The local build is ad-hoc signed, not notarized. For development, run `.venv/bin/python main.py` after building the helper; Automation may then belong to Python or the terminal.
 
-For a developer preview: `.venv/bin/python main.py` (Automation may then belong to Python or your terminal).
+## Performance and privacy
 
-## Performance and behavior
+AppKit draws text and gradients without a web view. Visible playback is sampled on a background thread about every 350 ms and interpolated using a monotonic clock that absorbs small sample corrections. Real seeks, pauses, and track changes apply immediately. Network requests use a bounded worker pool. Positive third-party lyric results are cached for seven days. No background service or login item is installed.
 
-Native AppKit draws text and gradients without a web view. Playback is sampled on a background thread about every 350 ms and interpolated with a monotonic clock. Network requests run in a bounded worker pool, never on the UI thread. Positive lyric results are cached for seven days. The renderer is capped at 30 fps while playing; idle/paused states redraw on updates, and drawing is skipped when macOS reports the window occluded or the screen is locked. Disable animation or use Typography to reduce drawing work.
+The hidden widget's timers and polling stop, but its Python process retains memory. Visible animation still uses CPU/GPU; Python has a larger baseline than Maestro's Swift app. Disable motion or select Typography to reduce drawing work further.
 
-Python has a higher baseline memory cost than Maestro's Swift app. There is no claim of identical resource usage. Cadence does not install a background service or start itself at login.
+The Music cache is read locally, without modifying Music's database. Fallback lookups send song metadata to LRCLIB/NetEase; artwork uses Apple's iTunes Search API. The optional Apple Intelligence helper processes metadata on-device only when requested and exits afterward. No Apple account credentials, API keys, or telemetry are collected. Settings and rotating logs are in `~/Library/Application Support/Cadence`; the lyric cache is in `~/Library/Caches/Cadence`. Those files and the reference video are not included in the repo.
 
-## Lyrics and privacy
+## Validation
 
-Apple Music supplies playback metadata, **not its internal lyrics**. Cadence looks up LRCLIB and NetEase in parallel and upgrades to real word timestamps when available; late line-only results cannot downgrade them. Lyrics depend on catalogue availability. LRC supplies line timestamps; word timing is estimated using a song-derived pace adapted from Maestro. NetEase YRC, when used, supplies actual word timings. A timing offset slider helps with different masters. Missing/instrumental lyrics get an explicit status rather than a previous song's words.
+`python -m unittest discover -s tests -v` covers playback timing, word-animation continuity, jitter correction, seek/pause/song changes, stale results, LRC/YRC/TTML parsing, provider priority, settings migration and invalid AI query rejection.
 
-Song metadata is sent to LRCLIB/NetEase for lyrics and Apple's iTunes Search API for artwork. No Apple account credentials, API keys or telemetry. Settings and a rotating diagnostic log live in `~/Library/Application Support/Cadence`; lyrics cache lives in `~/Library/Caches/Cadence`. The repo does not contain those files.
-
-## Tests
-
-`python -m unittest discover -s tests -v` checks pause/seek extrapolation, rapid song changes and stale results, repeated LRC timestamps, offsets, instrumental gaps, YRC timing and wrong-artist/version rejection.
-
-On macOS, `python tests/ui_smoke.py /absolute/scratch/folder` renders synthetic preview lyrics and checks all eight renderers, several animation frames, lyrics-only transparency, no-progress rendering, timing nudges, native window level, resizing, position storage, click-through and lock/unlock visibility. It does not control Apple Music or change saved settings. Preview lyrics are original sample text, not a live song.
+On macOS, `python tests/ui_smoke.py /absolute/scratch/folder` renders original synthetic lyrics across all nine styles and five presets. It checks transparency, hidden controls, offset nudges, sizing, position, desktop window level, click-through, actual window occlusion, hidden timer/poll suspension, and lock-space creation/teardown. It does not control Music, change saved settings, or actually lock the computer. A real lock/unlock remains a manual visual check.
 
 ## Credits and license
 
-MIT. The Apple Music bridge and interpolation approach were adapted from [Maestro](https://github.com/Maestro2903/maestro-lyrics) by Shreeshanth R; see [MAESTRO-LICENSE](MAESTRO-LICENSE) and [NOTICE.md](NOTICE.md).
+MIT. The Apple Music bridge, song-derived word timing, and lock-screen space approach were adapted from [Maestro](https://github.com/Maestro2903/maestro-lyrics) by Shreeshanth R; see [MAESTRO-LICENSE](MAESTRO-LICENSE) and [NOTICE.md](NOTICE.md).
 
-[Verso](https://github.com/AkkiCode06/verso) inspired the desktop typography and album-colored atmosphere. No Verso code or assets are included. Lyrics and artwork retain their respective owners' rights.
+The Music cache lookup and TTML approach were adapted from [Apple Music Lyrics](https://github.com/Takpap/apple-music-lyrics); its MIT notice is in [APPLE-MUSIC-LYRICS-LICENSE](APPLE-MUSIC-LYRICS-LICENSE).
+
+[Verso](https://github.com/AkkiCode06/verso) inspired the typography and album-colored atmosphere. No Verso code or assets are included. Lyrics and artwork retain their respective owners' rights.

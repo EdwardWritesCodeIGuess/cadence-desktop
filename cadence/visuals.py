@@ -3,10 +3,12 @@ import math
 import random
 import hashlib
 import time
+from datetime import datetime
 from functools import lru_cache
 import AppKit as A
 import Foundation as F
 from .core import active_line
+from .motion import word_motion, smoothstep
 
 def color(hex_value, alpha=1):
     try:
@@ -49,14 +51,9 @@ def align_x(width, available, alignment, left=0):
     return left + (0 if alignment == 'Left' else available-width if alignment == 'Right' else (available-width)/2)
 
 
-def pulse(age, speed):
-    age = max(0, age)*speed
-    return math.exp(-age*9) * (.65+.35*math.sin(age*27))
-
-
-@lru_cache(maxsize=192)
-def paper_word(value, size, chaos, seed):
-    """Cache a word's cutout collage once; animate that image as a single layer."""
+@lru_cache(maxsize=1024)
+def paper_metrics(value, size, chaos, seed):
+    """Measure cutouts without rasterizing candidates during text fitting."""
     rng = random.Random(seed)
     faces = ['Georgia-Bold', 'Courier-Bold', 'HelveticaNeue-CondensedBlack', 'AvenirNext-Heavy', 'TimesNewRomanPS-BoldMT']
     palettes = [('#F5EAD4', '#22202B'), ('#DFD7C6', '#19151E'), ('#25212D', '#FFF4DD'),
@@ -70,6 +67,13 @@ def paper_word(value, size, chaos, seed):
         glyphs.append((ch, face, glyph_size, width, rng.choice(palettes), rng.uniform(-9, 9)*chaos, rng.uniform(-.07, .07)*size*chaos))
     width = sum(g[3]+size*.045 for g in glyphs)+size*.35
     height = size*1.65
+    return tuple(glyphs), width, height
+
+
+@lru_cache(maxsize=192)
+def paper_word(value, size, chaos, seed):
+    glyphs, width, height = paper_metrics(value, size, chaos, seed)
+    rng = random.Random(seed ^ 0xCADE)
     image = A.NSImage.alloc().initWithSize_((max(1, width), height))
     image.lockFocusFlipped_(True)
     x = size*.15
@@ -112,7 +116,8 @@ def layout_words(tokens, size, face, available, ransom, chaos):
         seed = int.from_bytes(hashlib.blake2b((str(index)+value).encode(), digest_size=4).digest(), 'little')
         image = None
         if ransom:
-            image, width, height = paper_word(value.strip(), size*.82, chaos, seed)
+            image = (value.strip(), size*.82, chaos, seed)
+            _, width, height = paper_metrics(*image)
         else:
             width = measure(value.strip(), size, face)
         width += size*.25
@@ -121,6 +126,18 @@ def layout_words(tokens, size, face, available, ransom, chaos):
         rows[-1].append((index, width, image))
         widths[-1] += width
     return rows, widths
+
+
+@lru_cache(maxsize=96)
+def fit_phrase(tokens, size, face, w, area, neighbors, mode, chaos, spacing):
+    ransom = mode == 'Ransom Note'
+    room = max(30, area-(68 if neighbors and mode != 'Pop' else 16))
+    while True:
+        rows, widths = layout_words(tokens, size, face, w-80, ransom, chaos)
+        row_height = size*max(spacing, 1.55 if ransom else 1.1)
+        if (len(rows)*row_height <= room and max(widths, default=0) <= w-80) or size <= 14:
+            return size, row_height, rows, widths
+        size -= 2
 
 
 class Renderer:
@@ -132,6 +149,29 @@ class Renderer:
         self.scrolling = False
         self.ribbon_x = None
         self.last_draw = 0
+        self.warm_target = None
+        self.warm_index = 0
+
+    def prewarm(self, owner, bounds):
+        s = owner.settings
+        if s['lyric_style'] != 'Ransom Note' or not owner.playback.lines:
+            return
+        lines = owner.playback.lines
+        idx = active_line(lines, owner.playback.position_at(time.monotonic())+s['offset'])+1
+        if idx >= len(lines):
+            return
+        bare = s['layout'] == 'Lyrics only'
+        top = 82 if s['show_title'] and not bare else 20
+        bottom = bounds.size.height-(46 if (s['show_time'] or s['show_source']) and not bare else 26 if s['show_progress'] and not bare else 20)
+        args = (tuple(w.text for w in lines[idx].words), s['font_size'], s['font'], bounds.size.width,
+                bottom-top, s['show_neighbors'], 'Ransom Note', s['ransom_chaos'], s['line_spacing'])
+        if self.warm_target != args:
+            self.warm_target, self.warm_index = args, 0
+        _, _, rows, _ = fit_phrase(*args)
+        images = [image for row in rows for _, _, image in row if image]
+        if self.warm_index < len(images):
+            paper_word(*images[self.warm_index])
+            self.warm_index += 1
 
     def paint(self, owner, bounds):
         s = owner.settings
@@ -140,19 +180,25 @@ class Renderer:
         dt = min(.1, max(0, now-self.last_draw))
         self.last_draw = now
         track = owner.playback.track
-        position = track.position_at(now)+s['offset']
+        position = owner.playback.position_at(now)+s['offset']
         accent = owner.accent if s['auto_color'] else s['accent']
         opacity = s['opacity']
         bare = s['layout'] == 'Lyrics only'
         header = s['show_title'] and not bare
         footer = (s['show_time'] or s['show_source']) and not bare
         progress = s['show_progress'] and not bare
-        top = 82 if header else 20
+        top = 112 if s['show_clock'] and not bare else 82 if header else 20
         bottom = h-(46 if footer else 26 if progress else 20)
+        album_card = s['widget_preset'] == 'Album card' and not bare and s['show_art']
+        art_y = top
+        art_side = min(w-64, (bottom-top)*.5) if album_card else 0
+        if album_card:
+            top += art_side+18
         center = (top+bottom)/2
         A.NSColor.clearColor().set()
         A.NSRectFillUsingOperation(bounds, A.NSCompositingOperationClear)
         A.NSGraphicsContext.saveGraphicsState()
+        A.NSGraphicsContext.currentContext().setImageInterpolation_(A.NSImageInterpolationHigh)
         rounded(((0, 0), (w, h)), 26).addClip()
         if s['style'] != 'Typography' and not bare:
             color('#10121E', opacity).set(); A.NSRectFill(bounds)
@@ -171,9 +217,13 @@ class Renderer:
                 text(owner.status, ((20, center+28), (w-40, 35)), 12, alpha=.6, centered=True)
             A.NSGraphicsContext.restoreGraphicsState()
             return
-        if header:
+        if s['show_clock'] and not bare:
+            stamp = datetime.now()
+            text(stamp.strftime('%I:%M').lstrip('0'), ((20, 16), (w-40, 56)), 44, s['text_color'], centered=True)
+            text(stamp.strftime('%A, %B %d'), ((20, 75), (w-40, 24)), 13, alpha=.55, centered=True)
+        if header and not s['show_clock']:
             x = 26
-            if s['show_art']:
+            if s['show_art'] and not album_card:
                 A.NSGraphicsContext.saveGraphicsState(); rounded(((24, 22), (42, 42)), 9).addClip()
                 if owner.art:
                     owner.art.drawInRect_fromRect_operation_fraction_respectFlipped_hints_(((24, 22), (42, 42)), A.NSZeroRect, A.NSCompositingOperationSourceOver, 1, True, None)
@@ -184,6 +234,16 @@ class Renderer:
             text(track.title, ((x, 23), (w-x-92, 23)), 14, weight=A.NSFontWeightSemibold)
             text(track.artist, ((x, 45), (w-x-92, 20)), 12, alpha=.5)
             text('PLAYING' if track.playing else 'PAUSED', ((w-92, 28), (68, 20)), 9, accent, centered=True)
+        if album_card:
+            A.NSGraphicsContext.saveGraphicsState()
+            artwork_rect = (((w-art_side)/2, art_y), (art_side, art_side))
+            rounded(artwork_rect, 16).addClip()
+            if owner.art:
+                owner.art.drawInRect_fromRect_operation_fraction_respectFlipped_hints_(artwork_rect, A.NSZeroRect, A.NSCompositingOperationSourceOver, 1, True, None)
+            else:
+                color(accent, .2).set(); A.NSRectFill(artwork_rect)
+                text('♫', (((w-art_side)/2, art_y+art_side*.25), (art_side, art_side*.6)), art_side*.4, accent, centered=True)
+            A.NSGraphicsContext.restoreGraphicsState()
         lines = owner.playback.lines
         idx = active_line(lines, position)
         if self.key != track.key or idx != self.index:
@@ -200,7 +260,10 @@ class Renderer:
         if idx >= 0 and lines[idx].text:
             current = lines[idx]
             mode = s['lyric_style']
-            if mode == 'Spotlight':
+            if mode == 'Kinetic Word':
+                previous_word = lines[idx-1].words[-1] if idx > 0 and lines[idx-1].words else None
+                self.kinetic(current, position, s, w, top, bottom, accent, previous_word)
+            elif mode == 'Spotlight':
                 self.spotlight(current, position, s, w, center, accent)
             elif mode == 'Ribbon':
                 self.ribbon(current, position, s, w, center, accent, dt)
@@ -228,27 +291,20 @@ class Renderer:
         A.NSGraphicsContext.restoreGraphicsState()
         if footer:
             if s['show_source']:
-                text('APPLE MUSIC / '+('WORD SYNC' if owner.playback.source == 'Word-synced lyrics' else 'ESTIMATED WORDS'), ((26, h-36), (w-120, 16)), 9, alpha=.4)
+                text('APPLE MUSIC / '+('WORD SYNC' if (owner.playback.source == 'Word-synced lyrics' or 'exact word' in owner.playback.source) else 'ESTIMATED WORDS'), ((26, h-36), (w-120, 16)), 9, alpha=.4)
             if s['show_time']:
-                shown = max(0, track.position_at(now))
+                shown = max(0, owner.playback.position_at(now))
                 text(f'{int(shown)//60}:{int(shown)%60:02}', ((w-78, h-37), (50, 18)), 10, alpha=.6, centered=True)
         if progress:
             color('#FFFFFF', .12).set(); rounded(((26, h-15), (w-52, 2)), 1).fill()
             if track.duration > 0:
-                color(accent, .8).set(); rounded(((26, h-15), ((w-52)*min(1, track.position_at(now)/track.duration), 2)), 1).fill()
+                color(accent, .8).set(); rounded(((26, h-15), ((w-52)*min(1, owner.playback.position_at(now)/track.duration), 2)), 1).fill()
         A.NSGraphicsContext.restoreGraphicsState()
 
     def phrase(self, line, position, s, w, center, accent, top, bottom, mode, max_size=None):
-        size = max_size or s['font_size']
-        ransom = mode == 'Ransom Note'
-        room = max(30, bottom-top-(68 if s['show_neighbors'] and mode != 'Pop' else 16))
-        tokens = tuple(word.text for word in line.words)
-        while True:
-            rows, widths = layout_words(tokens, size, s['font'], w-80, ransom, s['ransom_chaos'])
-            row_height = size*max(s['line_spacing'], 1.55 if ransom else 1.1)
-            if (len(rows)*row_height <= room and max(widths, default=0) <= w-80) or size <= 14:
-                break
-            size -= 2
+        size, row_height, rows, widths = fit_phrase(tuple(word.text for word in line.words),
+            max_size or s['font_size'], s['font'], w, bottom-top, s['show_neighbors'],
+            mode, s['ransom_chaos'], s['line_spacing'])
         height = len(rows)*row_height
         for ri, (row, width) in enumerate(zip(rows, widths)):
             x = align_x(width, w-80, s['alignment'], 40)
@@ -258,32 +314,75 @@ class Renderer:
                 x += slot
         return height
 
-    def word(self, word, position, s, x, y, width, size, accent, mode, image=None, index=0):
-        active = word.start <= position < word.end
-        passed = position >= word.end
-        if mode == 'Typewriter' and position < word.start:
-            return
-        age = position-word.start
-        amount = s['pop_amount'] if s['motion'] else 0
-        scale = 1+amount*(.12+pulse(age, s['animation_speed'])) if active else 1
-        alpha = (1 if active else .85 if passed else .45)*s['text_opacity']
+    def word(self, word, position, s, x, y, width, size, accent, mode, image=None, index=0, opacity=1.):
+        highlight, scale, alpha, entered = word_motion(position, word.start, word.end,
+            s['animation_speed'], s['pop_amount'], s['motion'])
+        alpha *= s['text_opacity'] * opacity
+        if mode == 'Typewriter':
+            if entered <= 0:
+                return
+            alpha *= entered
+        if isinstance(image, tuple):
+            image = paper_word(*image)[0]
         if mode == 'Wave' and s['motion']:
             y += math.sin(position*3.5+index*.7)*size*.13
         A.NSGraphicsContext.saveGraphicsState()
         transform = A.NSAffineTransform.transform(); transform.translateXBy_yBy_(x, y); transform.scaleBy_(scale); transform.concat()
         if image:
             iw, ih = image.size()
-            if active:
-                color(accent, .22*s['text_opacity']).set(); rounded(((-iw/2-3, -size*.66), (iw+6, size*1.32)), 5).fill()
+            if highlight > .001:
+                color(accent, .22*s['text_opacity']*highlight*opacity).set(); rounded(((-iw/2-3, -size*.66), (iw+6, size*1.32)), 5).fill()
             image.drawInRect_fromRect_operation_fraction_respectFlipped_hints_(((-iw/2, -ih/2), (iw, ih)), A.NSZeroRect, A.NSCompositingOperationSourceOver, alpha, True, None)
         else:
-            if active and mode == 'Pop':
-                color(accent, .22*s['text_opacity']).set(); rounded(((-width/2-5, -size*.6), (width+10, size*1.22)), 8).fill()
-            attrs = {A.NSFontAttributeName: font(size, s['font'], A.NSFontWeightSemibold), A.NSForegroundColorAttributeName: color(accent if active else s['text_color'], alpha)}
-            if mode == 'Neon' and active:
-                shadow = A.NSShadow.alloc().init(); shadow.setShadowColor_(color(accent, .8)); shadow.setShadowBlurRadius_(9); shadow.setShadowOffset_((0, 0)); attrs[A.NSShadowAttributeName] = shadow
+            if highlight > .001 and mode == 'Pop':
+                color(accent, .22*s['text_opacity']*highlight*opacity).set(); rounded(((-width/2-5, -size*.6), (width+10, size*1.22)), 8).fill()
+            attrs = {A.NSFontAttributeName: font(size, s['font'], A.NSFontWeightSemibold), A.NSForegroundColorAttributeName: color(s['text_color'], alpha).blendedColorWithFraction_ofColor_(highlight, color(accent, alpha))}
+            if mode == 'Neon' and highlight > .001:
+                shadow = A.NSShadow.alloc().init(); shadow.setShadowColor_(color(accent, .8*highlight*opacity)); shadow.setShadowBlurRadius_(9); shadow.setShadowOffset_((0, 0)); attrs[A.NSShadowAttributeName] = shadow
             F.NSString.stringWithString_(word.text.strip()).drawAtPoint_withAttributes_((-width/2, -size*.65), attrs)
         A.NSGraphicsContext.restoreGraphicsState()
+
+    def kinetic(self, line, position, s, w, top, bottom, accent, previous_word=None):
+        # One large word; independent X/Y scaling provides the stretchy fit in the reference.
+        index = next((i for i, word in enumerate(line.words) if word.start <= position < word.end), None)
+        if index is None:
+            index = next((i-1 for i, word in enumerate(line.words) if word.start > position), len(line.words)-1)
+        if index < 0:
+            return
+        word = line.words[index]
+        center = (top+bottom)/2
+        room = (bottom-top)*(.55 if s['show_neighbors'] else .84)
+        duration = max(.025, word.end-word.start)
+        age = max(0., position-word.start)
+        transition = smoothstep(age/min(.15/s['animation_speed'], duration*.45)) if s['motion'] else 1.
+        def draw(item, fade, vertical):
+            value = item.text.strip()
+            if not value or fade < .001:
+                return
+            base = 100.
+            fnt = font(base, s['font'], A.NSFontWeightHeavy)
+            width = F.NSString.stringWithString_(value).sizeWithAttributes_({A.NSFontAttributeName: fnt}).width
+            sx, sy = (w-72)/max(1, width), room/(base*.9)
+            uniform = min(sx, sy)
+            fill = s['stretch_fill']
+            sx = uniform+(sx-uniform)*fill
+            sy = uniform+(sy-uniform)*fill
+            bounce = 1-.34*s['pop_amount']*math.exp(-age*16*s['animation_speed'])*math.cos(age*22*s['animation_speed']) if s['motion'] else 1.
+            A.NSGraphicsContext.saveGraphicsState()
+            transform = A.NSAffineTransform.transform(); transform.translateXBy_yBy_(w/2, center+vertical)
+            transform.scaleXBy_yBy_(sx*bounce, sy*(2-bounce)); transform.concat()
+            attrs = {A.NSFontAttributeName: fnt, A.NSForegroundColorAttributeName: color(accent, fade*s['text_opacity'])}
+            F.NSString.stringWithString_(value).drawAtPoint_withAttributes_((-width/2, -base*.64), attrs)
+            A.NSGraphicsContext.restoreGraphicsState()
+        previous_word = line.words[index-1] if index > 0 else previous_word
+        if previous_word and transition < 1 and 0 <= word.start-previous_word.end < .2:
+            draw(previous_word, 1-transition, -18*transition)
+        draw(word, transition, 18*(1-transition))
+        if s['show_neighbors']:
+            previous = line.words[index-1].text.strip() if index > 0 else ''
+            following = line.words[index+1].text.strip() if index+1 < len(line.words) else ''
+            for value, y in [(previous, top+4), (following, bottom-28)]:
+                text(value, ((24, y), (w-48, 28)), 22, s['text_color'], s['context_opacity'], centered=True, weight=A.NSFontWeightBold)
 
     def spotlight(self, line, position, s, w, center, accent):
         index = next((i for i, word in enumerate(line.words) if word.start <= position < word.end), None)
@@ -292,11 +391,17 @@ class Renderer:
         if index < 0:
             return
         word = line.words[index]
-        size = s['font_size']*1.7
-        while measure(word.text.strip(), size, s['font']) > w-110 and size > 16:
-            size -= 2
-        width = measure(word.text.strip(), size, s['font'])
-        self.word(word, position, s, w/2, center, width, size, accent, 'Neon')
+        blend = smoothstep((position-word.start)/min(.14/s['animation_speed'], max(.03, (word.end-word.start)*.4))) if s['motion'] else 1.
+        def draw(item, yy, opacity):
+            size = s['font_size']*1.7
+            while measure(item.text.strip(), size, s['font']) > w-110 and size > 16:
+                size -= 2
+            width = measure(item.text.strip(), size, s['font'])
+            self.word(item, position, s, w/2, yy, width, size, accent, 'Neon', opacity=opacity)
+            return size
+        if index > 0 and blend < 1 and word.start-line.words[index-1].end < .2:
+            draw(line.words[index-1], center-12*blend, 1-blend)
+        size = draw(word, center+12*(1-blend), blend)
         if s['show_neighbors']:
             for value, y in [(' '.join(t.text.strip() for t in line.words[max(0, index-3):index]), center-size*.9-25),
                              (' '.join(t.text.strip() for t in line.words[index+1:index+4]), center+size*.8)]:

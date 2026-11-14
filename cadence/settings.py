@@ -2,19 +2,19 @@ import json
 from pathlib import Path
 
 SUPPORT = Path.home() / 'Library/Application Support/Cadence'
-LYRIC_STYLES = ('Ransom Note', 'Pop', 'Spotlight', 'Ribbon', 'Scroll', 'Typewriter', 'Neon', 'Wave')
+LYRIC_STYLES = ('Kinetic Word', 'Ransom Note', 'Pop', 'Spotlight', 'Ribbon', 'Scroll', 'Typewriter', 'Neon', 'Wave')
 DEFAULTS = dict(width=680, height=340, font_size=38, opacity=.65, style='Aurora',
-                lyric_style='Ransom Note', font='SF Rounded', accent='#A8BAFF',
+                lyric_style='Kinetic Word', font='SF Rounded', accent='#A8BAFF',
                 auto_color=True, motion=True, locked=False, show_art=True,
                 offset=.22, x=None, y=None, layout='Full widget', show_title=True,
                 show_progress=True, show_time=True, show_source=True, show_neighbors=True,
                 scroll_lines=True, pop_amount=.35, animation_speed=1., line_spacing=1.4,
                 context_opacity=.3, text_opacity=1., ransom_chaos=.65, alignment='Center',
-                text_color='#FFFFFF', settings_version=2)
+                text_color='#FFFFFF', lock_screen=True, stretch_fill=.8, widget_preset='Custom', show_clock=False, settings_version=4)
 RANGES = {'width': (360, 1200), 'height': (180, 700), 'font_size': (20, 80),
           'opacity': (0, 1), 'offset': (-5, 5), 'pop_amount': (0, .8),
           'animation_speed': (.5, 2), 'line_spacing': (1.1, 2),
-          'context_opacity': (0, .8), 'text_opacity': (.2, 1), 'ransom_chaos': (0, 1)}
+          'context_opacity': (0, .8), 'text_opacity': (.2, 1), 'ransom_chaos': (0, 1), 'stretch_fill': (0, 1)}
 
 class Settings(dict):
     def __init__(self):
@@ -32,7 +32,10 @@ class Settings(dict):
                 self['offset'] = .22
         except (OSError, ValueError, TypeError):
             pass
-        self['settings_version'] = 2
+        if self.get('settings_version', 1) < 4:
+            self['lyric_style'] = 'Kinetic Word'
+            self['show_neighbors'] = False
+        self['settings_version'] = 4
         for key, (low, high) in RANGES.items():
             self[key] = max(low, min(high, self[key]))
         for key, options in [('style', ('Aurora', 'Glass', 'Typography')), ('lyric_style', LYRIC_STYLES),
