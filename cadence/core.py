@@ -122,5 +122,9 @@ class Playback:
     def accept(self, generation, lines, source):
         if generation != self.generation:
             return False
+        def quality(label):
+            return 2 if label == 'Word-synced lyrics' else 0 if label.startswith('NetEase') else 1
+        if self.lines and (not lines or quality(self.source) > quality(source)):
+            return False
         self.lines, self.source = lines, source
         return True

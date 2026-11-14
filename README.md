@@ -12,6 +12,34 @@ A movable Apple Music lyric widget that lives **above your wallpaper and below y
 - Drag to move, right-click to customize, and lock the position for click-through behavior. Placement and appearance survive relaunches.
 - Uses one desktop-level window across Spaces. Does not cover normal app windows or the lock screen.
 
+## Kinetic lyrics (v2)
+
+Eight independent lyric effects work with any backdrop:
+
+| Effect | Motion |
+| --- | --- |
+| Ransom Note | Mixed letter cutouts on textured paper, with active-word pops |
+| Pop | Springy word highlights and capsules |
+| Spotlight | One large active word with nearby words above and below |
+| Ribbon | A horizontal strip that follows each word |
+| Scroll | A vertical stack of lyric lines with a highlighted active phrase |
+| Typewriter | Reveals the phrase word by word |
+| Neon | Glowing active words |
+| Wave | Gently undulating words with active-word emphasis |
+
+Ransom Note is drawn locally and cached; it does not need external letter images.
+Effects controls include pop strength, animation speed, cutout variation, line spacing,
+neighbor visibility, typeface, alignment, and lyric size. **Layout → Lyrics only**
+removes the backdrop and all song/time/progress UI without losing individual choices.
+Full widget mode has separate switches for title, art, progress, elapsed time and the
+source label. Colors controls adjust text/accent colors and independent opacities.
+
+**Timing:** the default is +0.22 seconds (positive shows lyrics earlier). Existing
+custom nonzero offsets are retained. Earlier/Later buttons and menu actions nudge
+by 100 ms; Reset restores +0.22 seconds. The Timing tab identifies whether timestamps
+are real or estimated. A constant offset can address consistent latency, but cannot
+make estimated word timings exact. Both lyric providers still depend on coverage.
+
 ## Use
 
 Launch **Cadence.app**, allow it to control **Music** when macOS asks, then play a song in the native Apple Music app. The waveform menu-bar icon opens Customize, Refresh lyrics and position controls.
@@ -39,13 +67,13 @@ For a developer preview: `.venv/bin/python main.py` (Automation may then belong 
 
 ## Performance and behavior
 
-Native AppKit draws text and gradients without a web view. Playback is sampled on a background thread about every 650 ms and interpolated with a monotonic clock. Network requests run in a bounded worker pool, never on the UI thread. Positive lyric results are cached for seven days. The renderer is capped at 30 fps while playing; idle/paused states redraw on updates, and drawing is skipped when macOS reports the window occluded or the screen is locked. Disable animation or use Typography to reduce drawing work.
+Native AppKit draws text and gradients without a web view. Playback is sampled on a background thread about every 350 ms and interpolated with a monotonic clock. Network requests run in a bounded worker pool, never on the UI thread. Positive lyric results are cached for seven days. The renderer is capped at 30 fps while playing; idle/paused states redraw on updates, and drawing is skipped when macOS reports the window occluded or the screen is locked. Disable animation or use Typography to reduce drawing work.
 
 Python has a higher baseline memory cost than Maestro's Swift app. There is no claim of identical resource usage. Cadence does not install a background service or start itself at login.
 
 ## Lyrics and privacy
 
-Apple Music supplies playback metadata, **not its internal lyrics**. Cadence uses LRCLIB with a NetEase fallback. Lyrics depend on catalogue availability. LRC supplies line timestamps; word timing is estimated using a song-derived pace adapted from Maestro. NetEase YRC, when used, supplies actual word timings. A timing offset slider helps with different masters. Missing/instrumental lyrics get an explicit status rather than a previous song's words.
+Apple Music supplies playback metadata, **not its internal lyrics**. Cadence looks up LRCLIB and NetEase in parallel and upgrades to real word timestamps when available; late line-only results cannot downgrade them. Lyrics depend on catalogue availability. LRC supplies line timestamps; word timing is estimated using a song-derived pace adapted from Maestro. NetEase YRC, when used, supplies actual word timings. A timing offset slider helps with different masters. Missing/instrumental lyrics get an explicit status rather than a previous song's words.
 
 Song metadata is sent to LRCLIB/NetEase for lyrics and Apple's iTunes Search API for artwork. No Apple account credentials, API keys or telemetry. Settings and a rotating diagnostic log live in `~/Library/Application Support/Cadence`; lyrics cache lives in `~/Library/Caches/Cadence`. The repo does not contain those files.
 
@@ -53,7 +81,7 @@ Song metadata is sent to LRCLIB/NetEase for lyrics and Apple's iTunes Search API
 
 `python -m unittest discover -s tests -v` checks pause/seek extrapolation, rapid song changes and stale results, repeated LRC timestamps, offsets, instrumental gaps, YRC timing and wrong-artist/version rejection.
 
-On macOS, `python tests/ui_smoke.py /absolute/scratch/folder` renders synthetic preview lyrics and checks native window level, resizing, position storage, click-through and lock/unlock visibility. It does not control Apple Music or change saved settings. Preview lyrics are original sample text, not a live song.
+On macOS, `python tests/ui_smoke.py /absolute/scratch/folder` renders synthetic preview lyrics and checks all eight renderers, several animation frames, lyrics-only transparency, no-progress rendering, timing nudges, native window level, resizing, position storage, click-through and lock/unlock visibility. It does not control Apple Music or change saved settings. Preview lyrics are original sample text, not a live song.
 
 ## Credits and license
 

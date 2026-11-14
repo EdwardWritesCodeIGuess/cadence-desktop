@@ -1,51 +1,19 @@
 """Native AppKit UI. Desktop-level window, never a floating overlay."""
 import concurrent.futures
 import logging
-import math
 import queue
 import threading
 import time
-from pathlib import Path
 
 import objc
 import AppKit as A
 import Foundation as F
 import Quartz as Q
-from .core import Playback, Track, active_line
+from .core import Playback, Track
 from .music import MusicReader
-from .providers import lyrics, artwork
-from .settings import Settings, SUPPORT
-
-
-def color(hex_value, alpha=1):
-    try:
-        value = int(hex_value.lstrip('#'), 16)
-    except ValueError:
-        value = 0xA8BAFF
-    return A.NSColor.colorWithCalibratedRed_green_blue_alpha_(((value >> 16)&255)/255, ((value >> 8)&255)/255, (value&255)/255, alpha)
-
-
-def font(size, face='SF Rounded', weight=A.NSFontWeightMedium):
-    if face in ('SF Rounded', 'SF Pro'):
-        base = A.NSFont.systemFontOfSize_weight_(size, weight)
-        if face == 'SF Rounded':
-            descriptor = base.fontDescriptor().fontDescriptorWithDesign_(A.NSFontDescriptorSystemDesignRounded)
-            if descriptor:
-                return A.NSFont.fontWithDescriptor_size_(descriptor, size)
-        return base
-    return A.NSFont.fontWithName_size_(face, size) or A.NSFont.systemFontOfSize_(size)
-
-
-def text(value, rect, size=13, tint='#FFFFFF', alpha=1, face='SF Pro', centered=False, weight=A.NSFontWeightMedium):
-    paragraph = A.NSMutableParagraphStyle.alloc().init()
-    paragraph.setLineBreakMode_(A.NSLineBreakByTruncatingTail)
-    paragraph.setAlignment_(A.NSTextAlignmentCenter if centered else A.NSTextAlignmentLeft)
-    attrs = {A.NSFontAttributeName: font(size, face, weight), A.NSForegroundColorAttributeName: color(tint, alpha), A.NSParagraphStyleAttributeName: paragraph}
-    F.NSString.stringWithString_(str(value)).drawInRect_withAttributes_(rect, attrs)
-
-
-def rounded(rect, radius=20):
-    return A.NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(rect, radius, radius)
+from .providers import lyrics, word_lyrics, artwork
+from .settings import Settings, SUPPORT, LYRIC_STYLES, RANGES
+from .visuals import Renderer, color
 
 
 class DesktopPanel(A.NSPanel):
@@ -75,103 +43,9 @@ class LyricView(A.NSView):
         self.owner.customize_(None)
 
     def drawRect_(self, rect):
-        owner = self.owner
-        s = owner.settings
-        bounds = self.bounds()
-        w, h = bounds.size.width, bounds.size.height
-        A.NSColor.clearColor().set()
-        A.NSRectFillUsingOperation(bounds, A.NSCompositingOperationClear)
-        accent = owner.accent if s['auto_color'] else s['accent']
-        now = time.monotonic()
-        opacity = s['opacity']
-        A.NSGraphicsContext.saveGraphicsState()
-        rounded(((0, 0), (w, h)), 26).addClip()
-        if s['style'] != 'Typography':
-            color('#10121E', opacity).set()
-            A.NSRectFill(bounds)
-            if s['style'] == 'Aurora' and opacity > 0:
-                phase = now*.16 if s['motion'] and owner.playback.track.playing else 0
-                for dx, dy, tint in [(0, 0, accent), (.55, .22, '#7355B8')]:
-                    x = w * (dx-.1 + .08*math.sin(phase+dx*4))
-                    y = h * (dy-.5 + .14*math.cos(phase+dy*3))
-                    gradient = A.NSGradient.alloc().initWithStartingColor_endingColor_(color(tint, opacity*.42), color(tint, 0))
-                    gradient.drawFromCenter_radius_toCenter_radius_options_((x+w*.45, y+h*.7), 0, (x+w*.45, y+h*.7), w*.65, 0)
-            color('#FFFFFF', .09*opacity).setStroke()
-            border = rounded(((.5, .5), (w-1, h-1)), 26)
-            border.setLineWidth_(1)
-            border.stroke()
-        A.NSGraphicsContext.restoreGraphicsState()
-        track = owner.playback.track
-        if not track.title:
-            text('C A D E N C E', ((28, 27), (w-56, 22)), 11, accent, weight=A.NSFontWeightSemibold)
-            text('Your music, at home.', ((28, h/2-30), (w-56, 50)), min(34, s['font_size']), face=s['font'], centered=True)
-            text(owner.status, ((28, h/2+25), (w-56, 42)), 13, alpha=.65, centered=True)
-            text('Drag to place  ·  Right-click to customize', ((20, h-32), (w-40, 20)), 11, alpha=.45, centered=True)
-            return
-        title_x = 26
-        if s['show_art']:
-            if owner.art:
-                A.NSGraphicsContext.saveGraphicsState()
-                rounded(((24, 22), (42, 42)), 9).addClip()
-                owner.art.drawInRect_fromRect_operation_fraction_respectFlipped_hints_(((24, 22), (42, 42)), A.NSZeroRect, A.NSCompositingOperationSourceOver, 1, True, None)
-                A.NSGraphicsContext.restoreGraphicsState()
-            else:
-                color(accent, .18).set()
-                rounded(((24, 22), (42, 42)), 9).fill()
-                text('♫', ((24, 28), (42, 30)), 23, accent, centered=True)
-            title_x = 78
-        text(track.title, ((title_x, 23), (w-title_x-92, 23)), 14, weight=A.NSFontWeightSemibold)
-        text(track.artist, ((title_x, 45), (w-title_x-92, 20)), 12, alpha=.5)
-        text('PLAYING' if track.playing else 'PAUSED', ((w-92, 28), (68, 20)), 9, accent, centered=True)
-        position = track.position_at(now) + s['offset']
-        lines = owner.playback.lines
-        idx = active_line(lines, position)
-        middle = 80 + (h-132)/2
-        if idx >= 0 and lines[idx].text:
-            current = lines[idx]
-            previous = lines[idx-1].text if idx > 0 else ''
-            following = lines[idx+1].text if idx+1 < len(lines) else ''
-            # Fit the active phrase into at most three rows, downscaling long phrases.
-            size = s['font_size']
-            tokens = current.words
-            while True:
-                fnt = font(size, s['font'], A.NSFontWeightSemibold)
-                measures = [F.NSString.stringWithString_(word.text).sizeWithAttributes_({A.NSFontAttributeName: fnt}).width for word in tokens]
-                rows, widths = [[]], [0.]
-                for word, width in zip(tokens, measures):
-                    if rows[-1] and widths[-1]+width > w-64:
-                        rows.append([]); widths.append(0.)
-                    rows[-1].append((word, width)); widths[-1] += width
-                if len(rows)*size*1.23 <= h-170 and max(widths, default=0) <= w-56 or size <= 16:
-                    break
-                size -= 2
-            row_height = size*1.23
-            top = middle-len(rows)*row_height/2
-            text(previous, ((30, max(73, top-31)), (w-60, 23)), min(14, size*.5), alpha=.28, centered=True, face=s['font'])
-            for row_idx, (row, row_width) in enumerate(zip(rows, widths)):
-                x = (w-row_width)/2
-                for word, width in row:
-                    active = word.start <= position < word.end
-                    passed = position >= word.end
-                    tint = accent if active else '#FFFFFF'
-                    alpha = 1 if active else (.85 if passed else .38)
-                    rise = -2 if active and s['motion'] else 0
-                    attrs = {A.NSFontAttributeName: fnt, A.NSForegroundColorAttributeName: color(tint, alpha)}
-                    F.NSString.stringWithString_(word.text).drawAtPoint_withAttributes_((x, top+row_idx*row_height+rise), attrs)
-                    x += width
-            text(following, ((30, min(h-67, top+len(rows)*row_height+7)), (w-60, 23)), min(14, size*.5), alpha=.32, centered=True, face=s['font'])
-        else:
-            message = '♪' if lines else ('Finding the words…' if owner.loading else owner.playback.source or 'No synced lyrics found')
-            text(message, ((24, middle-20), (w-48, 48)), 32 if lines else 20, accent, centered=True, face=s['font'])
-        text('APPLE MUSIC  /  '+('WORD SYNC' if 'Word-synced' in owner.playback.source else 'LYRICS'), ((26, h-36), (w-120, 16)), 9, alpha=.4)
-        duration = track.duration
-        shown = max(0, track.position_at(now))
-        text(f'{int(shown)//60}:{int(shown)%60:02}', ((w-78, h-37), (50, 18)), 10, alpha=.6, centered=True)
-        color('#FFFFFF', .12).set()
-        rounded(((26, h-15), (w-52, 2)), 1).fill()
-        if duration > 0:
-            color(accent, .8).set()
-            rounded(((26, h-15), ((w-52)*min(1, shown/duration), 2)), 1).fill()
+        if not hasattr(self, 'renderer'):
+            self.renderer = Renderer()
+        self.renderer.paint(self.owner, self.bounds())
 
 
 class Controller(A.NSObject):
@@ -251,7 +125,7 @@ class Controller(A.NSObject):
         menu = A.NSMenu.alloc().init()
         self.track_item = A.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_('Cadence · Apple Music', None, '')
         menu.addItem_(self.track_item)
-        for title, action, key in [('Customize…', 'customize:', ','), ('Lock / unlock position', 'toggleLock:', ''), ('Center widget', 'center:', ''), ('Show / hide widget', 'toggleVisible:', ''), ('Refresh lyrics', 'refresh:', 'r'), ('Open Apple Music', 'openMusic:', ''), ('Quit Cadence', 'quit:', 'q')]:
+        for title, action, key in [('Customize…', 'customize:', ','), ('Lock / unlock position', 'toggleLock:', ''), ('Center widget', 'center:', ''), ('Show / hide widget', 'toggleVisible:', ''), ('Refresh lyrics', 'refresh:', 'r'), ('Lyrics earlier (+100 ms)', 'earlier:', ''), ('Lyrics later (−100 ms)', 'later:', ''), ('Toggle lyrics only', 'lyricsOnly:', ''), ('Open Apple Music', 'openMusic:', ''), ('Quit Cadence', 'quit:', 'q')]:
             item = A.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(title, action, key)
             item.setTarget_(self)
             menu.addItem_(item)
@@ -267,7 +141,7 @@ class Controller(A.NSObject):
                         self.events.put(('track', reader.read()))
                 except Exception as exc:
                     self.events.put(('error', str(exc)))
-                self.stop.wait(.65)
+                self.stop.wait(.35)
 
     @objc.python_method
     def requestAssets(self):
@@ -279,7 +153,8 @@ class Controller(A.NSObject):
             self.loading = False
             return
         self.loading = True
-        for kind, fn in [('lyrics', lyrics), ('art', artwork)]:
+        self.pending_lyrics = 2
+        for kind, fn in [('lyrics', lyrics), ('words', word_lyrics), ('art', artwork)]:
             future = self.pool.submit(fn, track)
             def done(result, kind=kind, generation=generation):
                 if result.cancelled():
@@ -288,7 +163,7 @@ class Controller(A.NSObject):
                     self.events.put((kind, generation, result.result()))
                 except Exception:
                     logging.exception('Asset lookup failed')
-                    self.events.put((kind, generation, ([], 'Lyrics unavailable · try Refresh') if kind == 'lyrics' else None))
+                    self.events.put((kind, generation, ([], 'Lyrics unavailable · try Refresh') if kind in ('lyrics', 'words') else None))
             future.add_done_callback(done)
             self.pending.append(future)
 
@@ -299,7 +174,6 @@ class Controller(A.NSObject):
             kind = event[0]
             if kind == 'track':
                 track = event[1]
-                was_playing = self.playback.track.playing
                 if self.playback.update(track):
                     self.art = None
                     self.accent = '#A8BAFF'
@@ -315,9 +189,11 @@ class Controller(A.NSObject):
                     self.loading = False
                 changed = True
             elif event[1] == self.playback.generation:
-                if kind == 'lyrics':
-                    self.playback.accept(event[1], *event[2])
-                    self.loading = False
+                if kind in ('lyrics', 'words'):
+                    self.pending_lyrics = max(0, self.pending_lyrics-1)
+                    if event[2][0] or kind == 'lyrics':
+                        self.playback.accept(event[1], *event[2])
+                    self.loading = not self.playback.lines and self.pending_lyrics > 0
                     logging.info('Lyrics ready; lines=%d; %s', len(self.playback.lines), self.playback.source)
                 elif kind == 'art' and event[2]:
                     self.art = A.NSImage.alloc().initWithData_(F.NSData.dataWithBytes_length_(event[2], len(event[2])))
@@ -346,6 +222,7 @@ class Controller(A.NSObject):
             self.last_draw = now
         if self.preferences and self.preferences.isVisible():
             self.connection_label.setStringValue_((('Connected to Apple Music · '+self.playback.track.title) if self.playback.track.title else self.status))
+            self.source_label.setStringValue_(self.playback.source or 'Play a song to check lyric timing')
 
     def screenLocked_(self, note):
         self.locked = True
@@ -417,65 +294,127 @@ class Controller(A.NSObject):
 
     @objc.python_method
     def buildPreferences(self):
-        self.preferences = A.NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(((0, 0), (490, 650)), A.NSWindowStyleMaskTitled | A.NSWindowStyleMaskClosable | A.NSWindowStyleMaskMiniaturizable, A.NSBackingStoreBuffered, False)
+        self.preferences = A.NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(((0, 0), (550, 710)), A.NSWindowStyleMaskTitled | A.NSWindowStyleMaskClosable | A.NSWindowStyleMaskMiniaturizable, A.NSBackingStoreBuffered, False)
         self.preferences.setReleasedWhenClosed_(False)
         self.preferences.setTitle_('Cadence · Customize')
         self.preferences.center()
         content = self.preferences.contentView()
-        self.label(content, 'Make room for the music.', 28, 594, size=23)
-        self.connection_label = self.label(content, self.status, 28, 560, 436, 11)
-        self.label(content, 'Lives above your wallpaper, below your windows.', 28, 533, 436, 12)
-        y = 486
-        for key, title, options in [('style', 'Look', ['Aurora', 'Glass', 'Typography']), ('font', 'Typeface', ['SF Rounded', 'SF Pro', 'Avenir Next', 'Helvetica Neue', 'Georgia'])]:
-            self.label(content, title, 28, y)
-            control = A.NSPopUpButton.alloc().initWithFrame_pullsDown_(((180, y-2), (280, 28)), False)
-            control.addItemsWithTitles_(options)
-            control.selectItemWithTitle_(self.settings[key])
+        self.label(content, 'Give every word a little life.', 26, 654, 500, 23)
+        self.connection_label = self.label(content, self.status, 26, 615, 500, 11)
+        self.label(content, 'Desktop lyrics, exactly your way.', 26, 586, 500, 12)
+        tabs = A.NSTabView.alloc().initWithFrame_(((18, 48), (514, 530)))
+        content.addSubview_(tabs)
+        panes = {}
+        for name in ('Effects', 'Layout', 'Colors', 'Timing'):
+            item = A.NSTabViewItem.alloc().initWithIdentifier_(name)
+            item.setLabel_(name)
+            pane = A.NSView.alloc().initWithFrame_(((0, 0), (480, 480)))
+            item.setView_(pane); tabs.addTabViewItem_(item); panes[name] = pane
+        def popup(parent, key, title, options, y):
+            self.label(parent, title, 16, y, 160)
+            control = A.NSPopUpButton.alloc().initWithFrame_pullsDown_(((184, y-2), (282, 28)), False)
+            control.addItemsWithTitles_(options); control.selectItemWithTitle_(self.settings[key])
             control.setTarget_(self); control.setAction_('changed:')
-            self.controls[key] = control
-            content.addSubview_(control)
-            y -= 39
-        for key, title, low, high in [('width', 'Width', 360, 1000), ('height', 'Height', 220, 600), ('font_size', 'Lyric size', 20, 60), ('opacity', 'Backdrop opacity', 0, 1), ('offset', 'Timing offset (seconds)', -3, 3)]:
-            self.label(content, title, 28, y, 160)
+            self.controls[key] = control; parent.addSubview_(control)
+        def slider(parent, key, title, y):
+            self.label(parent, title, 16, y, 160)
+            low, high = RANGES[key]
             control = A.NSSlider.sliderWithValue_minValue_maxValue_target_action_(self.settings[key], low, high, self, 'changed:')
-            control.setFrame_(((180, y), (218, 22)))
-            control.setContinuous_(True)
-            self.controls[key] = control
-            content.addSubview_(control)
-            self.controls[key+'_value'] = self.label(content, self.formatValue(key), 407, y, 60, 11)
-            y -= 35
-        self.label(content, 'Custom accent', 28, y)
-        well = A.NSColorWell.alloc().initWithFrame_(((180, y-1), (65, 25)))
-        well.setColor_(color(self.settings['accent']))
-        well.setTarget_(self); well.setAction_('changed:')
-        self.controls['accent'] = well; content.addSubview_(well)
-        y -= 37
-        for key, title in [('auto_color', 'Match the album artwork'), ('motion', 'Animate the aurora and active words'), ('show_art', 'Show album cover'), ('locked', 'Lock position (click through the widget)')]:
+            control.setFrame_(((184, y), (212, 22))); control.setContinuous_(True)
+            self.controls[key] = control; parent.addSubview_(control)
+            self.controls[key+'_value'] = self.label(parent, self.formatValue(key), 406, y, 66, 11)
+        def checkbox(parent, key, title, y):
             control = A.NSButton.checkboxWithTitle_target_action_(title, self, 'changed:')
-            control.setFrame_(((28, y), (430, 22)))
-            control.setState_(int(self.settings[key]))
-            self.controls[key] = control; content.addSubview_(control)
-            y -= 28
-        self.label(content, 'Drag the widget to move it. Right-click it to return here.', 28, 33, 440, 11)
-        self.label(content, 'Line-synced lyrics use estimated word timing.', 28, 12, 440, 10)
+            control.setFrame_(((16, y), (450, 22))); control.setState_(int(self.settings[key]))
+            self.controls[key] = control; parent.addSubview_(control)
+        def well(parent, key, title, y):
+            self.label(parent, title, 16, y)
+            control = A.NSColorWell.alloc().initWithFrame_(((184, y-1), (70, 28)))
+            control.setColor_(color(self.settings[key])); control.setTarget_(self); control.setAction_('changed:')
+            self.controls[key] = control; parent.addSubview_(control)
+        effects = panes['Effects']
+        popup(effects, 'lyric_style', 'Lyric style', list(LYRIC_STYLES), 450)
+        popup(effects, 'font', 'Typeface', ['SF Rounded', 'SF Pro', 'Avenir Next', 'Helvetica Neue', 'Georgia', 'Courier'], 410)
+        popup(effects, 'alignment', 'Alignment', ['Left', 'Center', 'Right'], 370)
+        for key, title, y in [('font_size', 'Lyric size', 325), ('pop_amount', 'Pop strength', 285), ('animation_speed', 'Animation speed', 245), ('line_spacing', 'Line spacing', 205), ('ransom_chaos', 'Cutout variation', 165)]:
+            slider(effects, key, title, y)
+        checkbox(effects, 'motion', 'Animate words and background', 118)
+        checkbox(effects, 'scroll_lines', 'Scroll smoothly between lyric lines', 86)
+        checkbox(effects, 'show_neighbors', 'Show surrounding lyrics', 54)
+        self.label(effects, 'Ransom Note uses its own collage of mixed typefaces.', 16, 14, 460, 11)
+        layout = panes['Layout']
+        popup(layout, 'layout', 'Display', ['Full widget', 'Lyrics only'], 450)
+        popup(layout, 'style', 'Backdrop', ['Aurora', 'Glass', 'Typography'], 410)
+        slider(layout, 'width', 'Width', 360); slider(layout, 'height', 'Height', 320)
+        for key, title, y in [('show_title', 'Song title and artist', 266), ('show_art', 'Album artwork (with song title)', 234), ('show_progress', 'Progress bar', 202), ('show_time', 'Elapsed time', 170), ('show_source', 'Apple Music / timing label', 138), ('locked', 'Lock position — click through the widget', 88)]:
+            checkbox(layout, key, title, y)
+        self.label(layout, 'Lyrics only hides the backdrop, header, time and progress.', 16, 38, 460, 11)
+        self.label(layout, 'Your individual choices return when you select Full widget.', 16, 16, 460, 11)
+        colors = panes['Colors']
+        for key, title, y in [('opacity', 'Backdrop opacity', 450), ('text_opacity', 'Lyric opacity', 410), ('context_opacity', 'Surrounding lyrics', 370)]:
+            slider(colors, key, title, y)
+        well(colors, 'accent', 'Active word / accent', 305)
+        well(colors, 'text_color', 'Other words', 255)
+        checkbox(colors, 'auto_color', 'Match accent to album artwork', 200)
+        self.label(colors, 'Choosing a custom accent turns album color matching off.', 16, 144, 465, 11)
+        self.label(colors, 'Paper cutouts keep their own colors; the accent lights up', 16, 108, 465, 11)
+        self.label(colors, 'the word being sung.', 16, 86, 465, 11)
+        timing = panes['Timing']
+        self.source_label = self.label(timing, 'Play a song to check lyric timing', 16, 450, 460, 12)
+        slider(timing, 'offset', 'Timing offset (sec)', 394)
+        self.label(timing, 'Positive = earlier lyrics. Negative = later lyrics.', 16, 350, 460, 12)
+        for title, action, x, width in [('Earlier +100 ms', 'earlier:', 16, 154), ('Later −100 ms', 'later:', 176, 154), ('Reset', 'resetTiming:', 336, 120)]:
+            button = A.NSButton.buttonWithTitle_target_action_(title, self, action)
+            button.setFrame_(((x, 297), (width, 32))); timing.addSubview_(button)
+        for value, y in [('Start with +0.22 seconds, then adjust while listening.', 242),
+                         ('Real word timestamps are preferred when available.', 204),
+                         ('Otherwise word timing is estimated from synced lines.', 180),
+                         ('An offset fixes consistent lag; it cannot fix every word', 142),
+                         ('when a song has only line timestamps.', 118)]:
+            self.label(timing, value, 16, y, 465, 12)
+        self.label(content, 'Drag the widget to move it. Right-click it to customize.', 26, 15, 500, 11)
+
+    @objc.python_method
+    def setOffset(self, value):
+        self.settings['offset'] = max(-5, min(5, round(value, 2)))
+        if 'offset' in self.controls:
+            self.controls['offset'].setDoubleValue_(self.settings['offset'])
+            self.controls['offset_value'].setStringValue_(self.formatValue('offset'))
+        self.settings.save(); self.view.setNeedsDisplay_(True)
+
+    def earlier_(self, sender):
+        self.setOffset(self.settings['offset']+.1)
+
+    def later_(self, sender):
+        self.setOffset(self.settings['offset']-.1)
+
+    def resetTiming_(self, sender):
+        self.setOffset(.22)
+
+    def lyricsOnly_(self, sender):
+        self.settings['layout'] = 'Full widget' if self.settings['layout'] == 'Lyrics only' else 'Lyrics only'
+        if 'layout' in self.controls:
+            self.controls['layout'].selectItemWithTitle_(self.settings['layout'])
+        self.settings.save(); self.view.setNeedsDisplay_(True)
 
     @objc.python_method
     def formatValue(self, key):
         value = self.settings[key]
-        return f'{value:+.1f}' if key == 'offset' else f'{value:.0%}' if key == 'opacity' else str(int(value))
+        return f'{value:+.2f}' if key == 'offset' else f'{value:.0%}' if key in ('opacity', 'text_opacity', 'context_opacity', 'pop_amount', 'ransom_chaos') else f'{value:.1f}×' if key in ('animation_speed', 'line_spacing') else str(int(value))
 
     def changed_(self, sender):
         key = next((k for k, v in self.controls.items() if v == sender), None)
-        if key in ('style', 'font'):
+        if key in ('style', 'font', 'lyric_style', 'alignment', 'layout'):
             self.settings[key] = str(sender.titleOfSelectedItem())
-        elif key in ('locked', 'auto_color', 'motion', 'show_art'):
+        elif key in ('locked', 'auto_color', 'motion', 'show_art', 'show_title', 'show_progress', 'show_time', 'show_source', 'show_neighbors', 'scroll_lines'):
             self.settings[key] = bool(sender.state())
-        elif key == 'accent':
+        elif key in ('accent', 'text_color'):
             c = sender.color().colorUsingColorSpace_(A.NSColorSpace.deviceRGBColorSpace())
             self.settings[key] = '#'+''.join(f'{round(v*255):02X}' for v in [c.redComponent(), c.greenComponent(), c.blueComponent()])
-            self.settings['auto_color'] = False
-            self.controls['auto_color'].setState_(0)
-        elif key in ('width', 'height', 'font_size', 'opacity', 'offset'):
+            if key == 'accent':
+                self.settings['auto_color'] = False
+                self.controls['auto_color'].setState_(0)
+        elif key in RANGES:
             value = sender.doubleValue()
             self.settings[key] = int(value) if key in ('width', 'height', 'font_size') else value
             self.controls[key+'_value'].setStringValue_(self.formatValue(key))

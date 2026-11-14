@@ -9,7 +9,7 @@ import objc
 import AppKit as A
 import Foundation as F
 import cadence.app as ui
-from cadence.settings import DEFAULTS
+from cadence.settings import DEFAULTS, LYRIC_STYLES
 from cadence.core import Track, parse_lrc
 
 OUT = Path(sys.argv[1]); OUT.mkdir(parents=True, exist_ok=True)
@@ -35,14 +35,33 @@ class SmokeController(ui.Controller):
                           position=5, playing=True, sampled_at=time.monotonic())
             self.playback.update(track)
             self.playback.accept(self.playback.generation, parse_lrc('[00:00]A quiet moment\n[00:04]Let the evening settle in\n[00:10]And the music carry on', 180), 'demo')
-            for style in ('Aurora', 'Glass', 'Typography'):
-                self.settings['style'] = style
-                self.view.setNeedsDisplay_(True)
-                self.view.display()
+            self.settings['style'] = 'Aurora'
+            from dataclasses import replace
+            for style in LYRIC_STYLES:
+                self.settings['lyric_style'] = style
+                for frame in range(6):
+                    self.playback.track = replace(track, position=4+frame*.22, sampled_at=time.monotonic())
+                    self.view.setNeedsDisplay_(True); self.view.display()
                 bitmap = self.view.bitmapImageRepForCachingDisplayInRect_(self.view.bounds())
                 self.view.cacheDisplayInRect_toBitmapImageRep_(self.view.bounds(), bitmap)
                 bitmap.representationUsingType_properties_(A.NSBitmapImageFileTypePNG, {}).writeToFile_atomically_(str(OUT/(style+'.png')), True)
-            self.settings['style'] = 'Aurora'
+            # Verify lyrics-only actually leaves header/footer/background transparent.
+            self.settings['lyric_style'] = 'Ransom Note'
+            self.lyricsOnly_(None)
+            self.view.setNeedsDisplay_(True); self.view.display()
+            bitmap = self.view.bitmapImageRepForCachingDisplayInRect_(self.view.bounds())
+            self.view.cacheDisplayInRect_toBitmapImageRep_(self.view.bounds(), bitmap)
+            assert bitmap.colorAtX_y_(10, 10).alphaComponent() == 0
+            assert bitmap.colorAtX_y_(100, bitmap.pixelsHigh()-18).alphaComponent() == 0
+            bitmap.representationUsingType_properties_(A.NSBitmapImageFileTypePNG, {}).writeToFile_atomically_(str(OUT/'lyrics-only.png'), True)
+            self.lyricsOnly_(None)
+            self.settings['show_progress'] = False
+            self.view.setNeedsDisplay_(True); self.view.display()
+            self.view.cacheDisplayInRect_toBitmapImageRep_(self.view.bounds(), bitmap)
+            bitmap.representationUsingType_properties_(A.NSBitmapImageFileTypePNG, {}).writeToFile_atomically_(str(OUT/'no-progress.png'), True)
+            before = self.settings['offset']
+            self.earlier_(None); assert abs(self.settings['offset']-before-.1) < .001
+            self.later_(None); assert abs(self.settings['offset']-before) < .001
             self.controls['width'].setDoubleValue_(760)
             self.changed_(self.controls['width'])
             assert self.panel.frame().size.width == 760
@@ -56,7 +75,7 @@ class SmokeController(ui.Controller):
             bitmap = content.bitmapImageRepForCachingDisplayInRect_(content.bounds())
             content.cacheDisplayInRect_toBitmapImageRep_(content.bounds(), bitmap)
             bitmap.representationUsingType_properties_(A.NSBitmapImageFileTypePNG, {}).writeToFile_atomically_(str(OUT/'settings.png'), True)
-            print('PASS: rendering, desktop level, resizing, position, click-through, screen-lock visibility', flush=True)
+            print('PASS: all eight styles, animation frames, lyrics-only transparency, no-progress rendering, timing nudges, desktop level, resizing, position, click-through, screen-lock visibility', flush=True)
         except Exception:
             import traceback
             traceback.print_exc()

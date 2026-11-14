@@ -1,7 +1,7 @@
 from setuptools import setup
 
 setup(
-    name='Cadence', version='1.0.0', app=['main.py'],
+    name='Cadence', version='2.0.0', app=['main.py'],
     data_files=['LICENSE', 'NOTICE.md', 'MAESTRO-LICENSE'],
     options={'py2app': {
         'argv_emulation': False,

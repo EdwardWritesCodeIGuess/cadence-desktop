@@ -25,6 +25,26 @@ class TimingTests(unittest.TestCase):
         state.update(Track())
         self.assertEqual(state.lines, [])
 
+    def test_real_word_timestamps_win_in_either_response_order(self):
+        for first in ('line', 'word'):
+            state = Playback()
+            state.update(Track(title='Example'))
+            lrc = parse_lrc('[00:01]One two')
+            yrc = parse_yrc('[1000,2000](1000,600,0)One (1600,1400,0)two')
+            if first == 'line':
+                state.accept(state.generation, lrc, 'Estimated')
+                self.assertTrue(state.accept(state.generation, yrc, 'Word-synced lyrics'))
+            else:
+                state.accept(state.generation, yrc, 'Word-synced lyrics')
+                self.assertFalse(state.accept(state.generation, lrc, 'Estimated'))
+            self.assertFalse(state.accept(state.generation, [], 'No result'))
+            self.assertEqual(state.lines[0].words[1].start, 1.6)
+            self.assertEqual(state.source, 'Word-synced lyrics')
+        state = Playback()
+        state.update(Track(title='Example'))
+        state.accept(state.generation, lrc, 'Synced lines')
+        self.assertFalse(state.accept(state.generation, lrc, 'NetEase lines · estimated word timing'))
+
     def test_lrc_offsets_repeated_timestamps_and_gaps(self):
         lines = parse_lrc('[offset:-500]\n[00:02.00][00:12.00]Hello world\n[00:05.00]\n[00:16.00]End', 20)
         self.assertEqual([ln.start for ln in lines], [1.5, 4.5, 11.5, 15.5])
