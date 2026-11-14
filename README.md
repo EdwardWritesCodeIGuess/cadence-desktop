@@ -2,6 +2,21 @@
 
 A movable Apple Music lyric widget that lives **above your wallpaper and below your app windows**. Python with native AppKit rendering through PyObjC; a small Swift helper provides optional on-device Apple Intelligence.
 
+## Download & install
+
+### [⬇ Download Cadence for Mac — Apple silicon](https://github.com/EdwardWritesCodeIGuess/cadence-desktop/releases/latest/download/Cadence-Apple-Silicon.dmg)
+
+1. Open the downloaded DMG and drag **Cadence** to **Applications**.
+2. Open **Cadence**, allow access to **Music**, and play a song.
+
+No Python or developer tools needed. Requires an M1-or-newer Mac and macOS 14+; tested on macOS 27.3. Optional Apple Intelligence needs macOS 26+.
+
+**First launch:** this personal build is not notarized. If blocked, approve Cadence under **System Settings → Privacy & Security → Open Anyway**, as described in [Apple's guide](https://support.apple.com/en-us/102445).
+
+[Full install guide](INSTALL.md) · [ZIP download](https://github.com/EdwardWritesCodeIGuess/cadence-desktop/releases/latest/download/Cadence-Apple-Silicon.zip) · [Latest release](https://github.com/EdwardWritesCodeIGuess/cadence-desktop/releases/latest)
+
+If this repo is private, your friend needs GitHub access to download. Alternatively, send them the DMG directly.
+
 ## New in v3
 
 - **Kinetic Word:** one large word at a time, with smooth crossfades and a squash/stretch pop inspired by the supplied video. **Stretch to fill** controls how much words expand independently across the widget's width and height. Turn **Neighboring words / lines** on for smaller surrounding words.
