@@ -490,7 +490,7 @@ class Controller(A.NSObject):
 def run():
     SUPPORT.mkdir(parents=True, exist_ok=True)
     from logging.handlers import RotatingFileHandler
-    logging.basicConfig(level=logging.INFO, handlers=[RotatingFileHandler(SUPPORT/'cadence.log', maxBytes=200000, backupCount=1)], format='%(asctime)s %(message)s')
+    logging.basicConfig(level=logging.INFO, handlers=[RotatingFileHandler(SUPPORT/'cadence.log', maxBytes=200000, backupCount=1, encoding='utf-8')], format='%(asctime)s %(message)s')
     app = A.NSApplication.sharedApplication()
     # A second launch should reuse the running app, including when invoked directly.
     running = A.NSRunningApplication.runningApplicationsWithBundleIdentifier_('com.edwardlink.cadence')
