@@ -15,7 +15,17 @@ No Python or developer tools needed. Requires an M1-or-newer Mac and macOS 14+; 
 
 [Full install guide](INSTALL.md) · [ZIP download](https://github.com/EdwardWritesCodeIGuess/cadence-desktop/releases/latest/download/Cadence-Apple-Silicon.zip) · [Latest release](https://github.com/EdwardWritesCodeIGuess/cadence-desktop/releases/latest)
 
-If this repo is private, your friend needs GitHub access to download. Alternatively, send them the DMG directly.
+Anyone can download it from the link above; no GitHub account is needed.
+
+## New in v3.1
+
+- **More pop:** Kinetic Word now springs in. Each word grows past its size and settles, stretches while it moves, leans slightly in alternating directions, and the outgoing word puffs away as it fades. A new **Glow** slider adds soft light around the word being sung, and **Sparks** throws a short burst from each new word. Both scale with **Pop strength** and can be turned off. The other styles get a livelier bounce and a small hop on the active word.
+- **Feels alive:** the Aurora backdrop brightens with every sung word. Colours come from the dominant hues of the album artwork (an accent and a second backdrop colour) and glide from one song to the next instead of snapping. Artwork and titles fade in, small equaliser bars move while music plays, and three dots fill up during instrumental breaks.
+- **Tighter timing:** Cadence reacts to Music's own play, pause and track-change announcements instead of waiting for the next poll, and applies every update on the next frame. Word-synced lyrics hold a finished line through short breaths instead of flashing a note between lines. When a song only has line timestamps, words are now spaced by syllables, with pauses at punctuation, a held last word, and a breath before the next line. This is still an estimate. Enhanced LRC files with per-word tags are read as real word timestamps.
+- **More songs matched:** labels that do not change a recording, such as *Remastered 2011*, *Explicit* or *Deluxe Edition*, are ignored when matching lyrics. Live, remix and edit versions are still kept apart. The word-timing search retries with the lead artist when collaborators are listed differently.
+- **Live preview:** with Customize open and nothing playing, the widget loops a few sample words so every control can be judged immediately.
+- **Menus:** the menu-bar menu shows checkmarks for Lock position, Show widget and Lyrics only, has **Lyric style** and **Widget layout** submenus, and shows the current timing offset. Right-click the widget for the same menu.
+- **Snapping:** a dragged widget snaps to the screen edges and centre lines. Hold Option to place it freely.
 
 ## New in v3
 
@@ -41,13 +51,13 @@ If this repo is private, your friend needs GitHub access to download. Alternativ
 | Neon | Glowing active words |
 | Wave | Gently undulating words |
 
-All effects work with Aurora, Glass, or transparent Typography backdrops. Controls include font, size, widget dimensions, colors, opacity, pop strength, speed, stretch, paper variation, line spacing, neighbors, alignment and timing offset. **Layout → Lyrics only** removes the backdrop and all other UI. Full widget mode has separate switches for title, art, progress, elapsed time and source. Settings and position persist.
+All effects work with Aurora, Glass, or transparent Typography backdrops. Controls include font, size, widget dimensions, colors, opacity, pop strength, glow, sparks, speed, stretch, paper variation, line spacing, neighbors, alignment and timing offset. **Layout → Lyrics only** removes the backdrop and all other UI. Full widget mode has separate switches for title, art, progress, elapsed time and source. Settings and position persist.
 
 Positive timing offsets show lyrics earlier. The default is +0.22 seconds; Earlier/Later actions nudge by 100 ms. Existing custom offsets are preserved. An offset can correct constant latency, but cannot make estimated word timing exact.
 
 ## Use
 
-Launch **Cadence.app**, allow it to control **Music**, then play a song in the native Apple Music app. The waveform menu-bar icon opens Customize, Refresh lyrics, and placement controls. Show the desktop to see the widget; drag it to move it and right-click to customize. Lock its position for click-through behavior.
+Launch **Cadence.app**, allow it to control **Music**, then play a song in the native Apple Music app. The waveform menu-bar icon opens Customize, lyric styles, widget layouts, Refresh lyrics, timing nudges and placement controls. Show the desktop to see the widget; drag it to move it and right-click it for the same menu. Lock its position for click-through behavior; the menu-bar icon still works while it is locked.
 
 For the video-inspired look, select **Effects → Kinetic Word**, turn neighboring words off, and adjust **Stretch to fill**. Choose **Layout → Lyrics only** for text directly over the wallpaper. Widget layouts are in the **Widgets** tab.
 
@@ -72,7 +82,7 @@ Copy `dist/Cadence.app` to Applications to install. Python and dependencies are 
 
 ## Performance and privacy
 
-AppKit draws text and gradients without a web view. Visible playback is sampled on a background thread about every 350 ms and interpolated using a monotonic clock that absorbs small sample corrections. Real seeks, pauses, and track changes apply immediately. Network requests use a bounded worker pool. Positive third-party lyric results are cached for seven days. No background service or login item is installed.
+AppKit draws text and gradients without a web view. Visible playback is sampled on a background thread about every 350 ms, and at once when Music announces a play, pause or track change. Samples are applied on the next frame and interpolated using a monotonic clock that absorbs small sample corrections. Real seeks, pauses, and track changes apply immediately. A paused widget redraws only briefly after something changes. Network requests use a bounded worker pool. Positive third-party lyric results are cached for seven days. No background service or login item is installed.
 
 The hidden widget's timers and polling stop, but its Python process retains memory. Visible animation still uses CPU/GPU; Python has a larger baseline than Maestro's Swift app. Disable motion or select Typography to reduce drawing work further.
 
@@ -80,9 +90,9 @@ The Music cache is read locally, without modifying Music's database. Fallback lo
 
 ## Validation
 
-`python -m unittest discover -s tests -v` covers playback timing, word-animation continuity, jitter correction, seek/pause/song changes, stale results, LRC/YRC/TTML parsing, provider priority, settings migration and invalid AI query rejection.
+`python -m unittest discover -s tests -v` covers playback timing, word-animation and spring continuity, jitter correction, seek/pause/song changes, stale results, LRC/enhanced LRC/YRC/TTML parsing, syllable-based word estimates, held lines and instrumental gaps, version-label matching, album palette selection, widget snapping, provider priority, settings migration and invalid AI query rejection.
 
-On macOS, `python tests/ui_smoke.py /absolute/scratch/folder` renders original synthetic lyrics across all nine styles and five presets. It checks transparency, hidden controls, offset nudges, sizing, position, desktop window level, click-through, actual window occlusion, hidden timer/poll suspension, and lock-space creation/teardown. It does not control Music, change saved settings, or actually lock the computer. A real lock/unlock remains a manual visual check.
+On macOS, `python tests/ui_smoke.py /absolute/scratch/folder` renders original synthetic lyrics across all nine styles and five presets. It checks the live preview, transparency, hidden controls, offset nudges, sizing, position, snapping, menu state, desktop window level, click-through, actual window occlusion, hidden timer/poll suspension, and lock-space creation/teardown. It does not control Music, change saved settings, or actually lock the computer. A real lock/unlock remains a manual visual check.
 
 ## Credits and license
 

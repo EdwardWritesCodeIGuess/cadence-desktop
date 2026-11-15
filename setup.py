@@ -8,7 +8,7 @@ subprocess.run(['xcrun', 'swiftc', '-parse-as-library', '-O', '-target',
                 'arm64-apple-macos26.0', 'native/LyricAssistant.swift', '-o', str(helper)], check=True)
 
 setup(
-    name='Cadence', version='3.0.0', app=['main.py'],
+    name='Cadence', version='3.1.0', app=['main.py'],
     data_files=['LICENSE', 'NOTICE.md', 'MAESTRO-LICENSE', 'APPLE-MUSIC-LYRICS-LICENSE', ('', [str(helper)])],
     options={'py2app': {
         'argv_emulation': False,
