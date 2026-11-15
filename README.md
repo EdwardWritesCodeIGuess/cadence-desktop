@@ -15,7 +15,7 @@ No Python or developer tools needed. Requires an M1-or-newer Mac and macOS 14+; 
 
 [Full install guide](INSTALL.md) · [ZIP download](https://github.com/EdwardWritesCodeIGuess/cadence-desktop/releases/latest/download/Cadence-Apple-Silicon.zip) · [Latest release](https://github.com/EdwardWritesCodeIGuess/cadence-desktop/releases/latest)
 
-If this repo is private, your friend needs GitHub access to download. Alternatively, send them the DMG directly.
+Anyone can download it from the link above; no GitHub account is needed.
 
 ## New in v3.1
 

@@ -24,7 +24,7 @@ This personal build is ad-hoc signed and **not notarized by Apple**. The first l
 - [ZIP alternative](https://github.com/EdwardWritesCodeIGuess/cadence-desktop/releases/latest/download/Cadence-Apple-Silicon.zip): unzip, then move Cadence.app to Applications.
 - [Latest release](https://github.com/EdwardWritesCodeIGuess/cadence-desktop/releases/latest): version details and SHA-256 checksums.
 
-Download one of these app assets, not GitHub's automatic “Source code” archives. While this repository is private, your friend must have repository access and be signed in to download. You can also send the downloaded DMG directly. [GitHub explains release access here](https://docs.github.com/en/repositories/releasing-projects-on-github/about-releases).
+Download one of these app assets, not GitHub's automatic “Source code” archives. The repository is public, so the links work for anyone without a GitHub account. You can also send the downloaded DMG directly.
 
 ## Update or remove
 
@@ -32,4 +32,4 @@ Quit Cadence from its menu-bar icon before replacing it with a new version. Sett
 
 ## Maintainer: package a release
 
-After building with `python setup.py py2app`, run `python scripts/package_release.py`. It packages a clean copy of the standalone app as a verified DMG and ZIP, with checksums, under `dist/release/`. It does not modify the installed app or include user settings, cached lyrics, or logs. Reuse the asset filenames above so the README's latest-download links continue working. Notarization requires a Developer ID certificate and a separate Apple notarization step; this packaging command does not notarize.
+After building with `python setup.py py2app`, run `python scripts/package_release.py`. It packages a clean copy of the standalone app as a verified DMG and ZIP, with checksums, under `dist/release/`. It does not modify the installed app or include user settings, cached lyrics, or logs. Reuse the asset filenames above so the README's latest-download links continue working. Publish them with `gh release create v<version> dist/release/Cadence-Apple-Silicon.dmg dist/release/Cadence-Apple-Silicon.zip dist/release/SHA256SUMS.txt --title "Cadence <version> — Download for Mac" --generate-notes`; the download links above always serve the newest published release. Notarization requires a Developer ID certificate and a separate Apple notarization step; this packaging command does not notarize.
