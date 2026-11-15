@@ -2,6 +2,7 @@
 import hashlib
 import json
 import logging
+import re
 import ssl
 import time
 import urllib.parse
@@ -78,31 +79,38 @@ def word_lyrics(track):
             return parse_yrc(cached['raw']), 'Word-synced lyrics'
     except (OSError, ValueError, KeyError):
         pass
+    # A second search with only the lead artist finds songs whose catalogue entry
+    # lists collaborators differently; match_candidate still vets every result.
+    lead = re.split(r'\s*(?:,|&|\bfeat\.?|\bft\.?)\s*', track.artist, maxsplit=1, flags=re.I)[0].strip()
+    queries = [clean_title(track.title)+' '+track.artist]
+    if lead and lead != track.artist:
+        queries.append(clean_title(track.title)+' '+lead)
     try:
-        data = fetch('https://music.163.com/api/search/get', {'type': 1, 'limit': 10, 's': clean_title(track.title)+' '+track.artist})
-        candidates = data.get('result', {}).get('songs', [])
-        candidates.sort(key=lambda c: abs(c.get('duration', 0)/1000-track.duration))
-        for candidate in candidates:
-            artist = ', '.join(a['name'] for a in candidate.get('artists', []))
-            if not match_candidate(track, candidate['name'], artist, candidate.get('duration', 0)/1000):
-                continue
-            data = fetch('https://music.163.com/api/song/lyric/v1', {'id': candidate['id'], 'lv': 1, 'yv': 1, 'tv': 1})
-            raw = data.get('yrc', {}).get('lyric', '')
-            lines = parse_yrc(raw)
-            if lines:
-                try:
-                    import tempfile
-                    with tempfile.NamedTemporaryFile(mode='w', dir=CACHE, delete=False, encoding='utf-8') as output:
-                        json.dump(dict(time=time.time(), raw=raw), output)
-                        temp = Path(output.name)
-                    temp.replace(path)
-                except OSError:
-                    logging.info('Could not cache word timestamps')
-                return lines, 'Word-synced lyrics'
-            lrc = data.get('lrc', {}).get('lyric', '')
-            if lrc:
-                return parse_lrc(lrc, track.duration), 'NetEase lines · estimated word timing'
-            break
+        for query in queries:
+            data = fetch('https://music.163.com/api/search/get', {'type': 1, 'limit': 10, 's': query})
+            candidates = data.get('result', {}).get('songs', [])
+            candidates.sort(key=lambda c: abs(c.get('duration', 0)/1000-track.duration))
+            for candidate in candidates:
+                artist = ', '.join(a['name'] for a in candidate.get('artists', []))
+                if not match_candidate(track, candidate['name'], artist, candidate.get('duration', 0)/1000):
+                    continue
+                data = fetch('https://music.163.com/api/song/lyric/v1', {'id': candidate['id'], 'lv': 1, 'yv': 1, 'tv': 1})
+                raw = data.get('yrc', {}).get('lyric', '')
+                lines = parse_yrc(raw)
+                if lines:
+                    try:
+                        import tempfile
+                        with tempfile.NamedTemporaryFile(mode='w', dir=CACHE, delete=False, encoding='utf-8') as output:
+                            json.dump(dict(time=time.time(), raw=raw), output)
+                            temp = Path(output.name)
+                        temp.replace(path)
+                    except OSError:
+                        logging.info('Could not cache word timestamps')
+                    return lines, 'Word-synced lyrics'
+                lrc = data.get('lrc', {}).get('lyric', '')
+                if lrc:
+                    return parse_lrc(lrc, track.duration), 'NetEase lines · estimated word timing'
+                break
     except Exception as exc:
         logging.info('Word timing lookup: %s', type(exc).__name__)
     return [], 'No word timestamps available'

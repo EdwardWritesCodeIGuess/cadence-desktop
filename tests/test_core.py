@@ -1,5 +1,6 @@
 import unittest
-from cadence.core import Track, Playback, active_line, parse_lrc, parse_yrc, match_candidate
+from cadence.core import (Track, Playback, active_line, display_line, demo_lines, parse_lrc, parse_yrc,
+                          match_candidate, clean_title, syllables, DEMO_LENGTH)
 
 
 class TimingTests(unittest.TestCase):
@@ -65,6 +66,64 @@ class TimingTests(unittest.TestCase):
         self.assertFalse(match_candidate(track, 'Home', 'Cover Band', 200))
         self.assertFalse(match_candidate(track, 'Home', 'Original Artist', 250))
         self.assertTrue(match_candidate(track, 'Home', 'Original Artist', 202))
+
+    def test_packaging_labels_ignored_but_other_recordings_still_rejected(self):
+        track = Track(title='Home (Remastered 2011)', artist='Original Artist', duration=200)
+        self.assertTrue(match_candidate(track, 'Home', 'Original Artist', 201))
+        self.assertTrue(match_candidate(track, 'Home [Explicit]', 'Original Artist', 201))
+        self.assertTrue(match_candidate(track, 'Home - 2011 Remaster', 'Original Artist', 201))
+        for other in ('Home (Live)', 'Home (Acoustic Version)', 'Home - Radio Edit', 'Home (Remix)'):
+            self.assertFalse(match_candidate(track, other, 'Original Artist', 201))
+        self.assertEqual(clean_title('Clean'), 'Clean')
+        self.assertEqual(clean_title('Stereo Hearts (feat. Someone)'), 'Stereo Hearts')
+
+    def test_estimated_words_follow_syllables_and_leave_a_breath(self):
+        self.assertGreater(syllables('beautiful'), syllables('strength'))
+        self.assertEqual(syllables('time'), 1.5)
+        line = parse_lrc('[00:10.00]Strength is beautiful, always\n[00:14.00]Next', 20)[0]
+        lengths = {word.text.strip(): word.end-word.start for word in line.words}
+        self.assertGreater(lengths['beautiful,'], lengths['Strength'])
+        self.assertEqual(''.join(word.text for word in line.words), 'Strength is beautiful, always')
+        self.assertAlmostEqual(line.words[0].start, 10)
+        # The last word is held, yet singing stops before the next line begins.
+        self.assertGreater(lengths['always'], lengths['Strength'])
+        self.assertLessEqual(line.words[-1].end, 13.75+1e-9)
+        for before, after in zip(line.words, line.words[1:]):
+            self.assertAlmostEqual(before.end, after.start)
+
+    def test_enhanced_lrc_word_tags_are_real_timestamps(self):
+        lines = parse_lrc('[offset:-500]\n[00:10.00]<00:10.00>Hello <00:10.80>bright <00:11.50>world<00:12.40>\n[00:14.00]Plain line', 20)
+        self.assertEqual(lines[0].text, 'Hello bright world')
+        self.assertEqual([word.text for word in lines[0].words], ['Hello ', 'bright ', 'world'])
+        self.assertEqual([(word.start, word.end) for word in lines[0].words], [(9.5, 10.3), (10.3, 11.0), (11.0, 11.9)])
+        self.assertEqual(lines[1].text, 'Plain line')
+        self.assertEqual(len(lines[1].words), 2)
+
+    def test_short_gaps_hold_the_line_and_long_gaps_report_the_pause(self):
+        lines = parse_yrc('[1000,1000](1000,1000,0)One\n[2600,1000](2600,1000,0)Two\n[9000,1000](9000,1000,0)Three')
+        self.assertEqual(display_line(lines, .5), (-1, (0., 1.)))
+        self.assertEqual(display_line(lines, 1.5), (0, None))
+        self.assertEqual(active_line(lines, 2.3), -1)
+        self.assertEqual(display_line(lines, 2.3), (0, None))      # a breath: keep showing "One"
+        self.assertEqual(display_line(lines, 2.7), (1, None))
+        self.assertEqual(display_line(lines, 5), (-1, (3.6, 9.)))  # an instrumental break
+        self.assertEqual(display_line(lines, 11), (-1, (10., None)))
+        marked = parse_lrc('[00:01]One\n[00:03]\n[00:04]Two\n[00:06]\n[00:20]Three', 30)
+        self.assertEqual(display_line(marked, 3.5)[0], 0)
+        self.assertEqual(display_line(marked, 10), (-1, (6., 20.)))
+
+    def test_line_starts_follow_every_change_of_lines(self):
+        state = Playback()
+        state.update(Track(title='One'))
+        state.accept(state.generation, parse_lrc('[00:01]First\n[00:05]Second'), 'test')
+        self.assertEqual(state.starts, [1, 5])
+        state.lines = []
+        self.assertEqual(state.starts, [])
+
+    def test_preview_words_fit_their_loop(self):
+        lines = demo_lines()
+        self.assertTrue(all(line.words for line in lines if line.text))
+        self.assertLessEqual(max(line.start for line in lines), DEMO_LENGTH)
 
 if __name__ == '__main__':
     unittest.main()

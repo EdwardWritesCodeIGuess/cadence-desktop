@@ -31,6 +31,13 @@ class SmokeController(ui.Controller):
         try:
             assert self.panel.level() < A.NSNormalWindowLevel
             assert not self.panel.isFloatingPanel()
+            # Live preview: with nothing playing and Customize open, sample words are drawn.
+            self.previewing = True
+            self.view.setNeedsDisplay_(True); self.view.display()
+            bitmap = self.view.bitmapImageRepForCachingDisplayInRect_(self.view.bounds())
+            self.view.cacheDisplayInRect_toBitmapImageRep_(self.view.bounds(), bitmap)
+            bitmap.representationUsingType_properties_(A.NSBitmapImageFileTypePNG, {}).writeToFile_atomically_(str(OUT/'preview.png'), True)
+            self.previewing = False
             track = Track(title='Evening Light', artist='Cadence preview', identifier='test', duration=180,
                           position=5, playing=True, sampled_at=time.monotonic())
             self.playback.update(track)
@@ -69,6 +76,16 @@ class SmokeController(ui.Controller):
             self.controls['width'].setDoubleValue_(760)
             self.changed_(self.controls['width'])
             assert self.panel.frame().size.width == 760
+            # Dragging near the centre snaps onto it; the menus mirror every state.
+            area, size = (self.panel.screen() or A.NSScreen.mainScreen()).visibleFrame(), self.panel.frame().size
+            centre = (area.origin.x+(area.size.width-size.width)/2, area.origin.y+(area.size.height-size.height)/2)
+            self.panel.setFrameOrigin_((centre[0]+6, centre[1]-5)); self.snapPosition()
+            assert abs(self.panel.frame().origin.x-centre[0]) <= 1 and abs(self.panel.frame().origin.y-centre[1]) <= 1
+            assert self.context_menu.numberOfItems() == self.menu.numberOfItems() > 10
+            styles = self.menu.itemWithTitle_('Lyric style').submenu()
+            self.pickStyle_(styles.itemWithTitle_('Neon'))
+            assert self.settings['lyric_style'] == 'Neon' and styles.itemWithTitle_('Neon').state() == 1
+            assert self.context_menu.itemWithTitle_('Lyric style').submenu().itemWithTitle_('Neon').state() == 1
             self.panel.setFrameOrigin_((80, 100)); self.savePosition()
             assert self.settings['x'] == 80 and self.settings['y'] == 100
             self.toggleLock_(None); assert self.panel.ignoresMouseEvents()
@@ -112,7 +129,7 @@ class SmokeController(ui.Controller):
             bitmap.representationUsingType_properties_(A.NSBitmapImageFileTypePNG, {}).writeToFile_atomically_(str(OUT/'settings.png'), True)
             import statistics
             print('Warm draw median:', round(statistics.median(frame_times), 2), 'ms; max:', round(max(frame_times), 2), 'ms', flush=True)
-            print('PASS: all nine styles, five widget presets, animation frames, lyrics-only transparency, no-progress rendering, timing nudges, desktop level, resizing, position, click-through, private lock-screen space, click-through, teardown, actual occlusion and hidden render/poll suspension', flush=True)
+            print('PASS: live preview, all nine styles, five widget presets, snapping, menu state, animation frames, lyrics-only transparency, no-progress rendering, timing nudges, desktop level, resizing, position, click-through, private lock-screen space, click-through, teardown, actual occlusion and hidden render/poll suspension', flush=True)
         except Exception:
             import traceback
             traceback.print_exc()

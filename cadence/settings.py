@@ -10,11 +10,13 @@ DEFAULTS = dict(width=680, height=340, font_size=38, opacity=.65, style='Aurora'
                 show_progress=True, show_time=True, show_source=True, show_neighbors=True,
                 scroll_lines=True, pop_amount=.35, animation_speed=1., line_spacing=1.4,
                 context_opacity=.3, text_opacity=1., ransom_chaos=.65, alignment='Center',
-                text_color='#FFFFFF', lock_screen=True, stretch_fill=.8, widget_preset='Custom', show_clock=False, settings_version=4)
+                text_color='#FFFFFF', lock_screen=True, stretch_fill=.8, widget_preset='Custom', show_clock=False,
+                glow=.5, sparks=True, settings_version=4)
 RANGES = {'width': (360, 1200), 'height': (180, 700), 'font_size': (20, 80),
           'opacity': (0, 1), 'offset': (-5, 5), 'pop_amount': (0, .8),
           'animation_speed': (.5, 2), 'line_spacing': (1.1, 2),
-          'context_opacity': (0, .8), 'text_opacity': (.2, 1), 'ransom_chaos': (0, 1), 'stretch_fill': (0, 1)}
+          'context_opacity': (0, .8), 'text_opacity': (.2, 1), 'ransom_chaos': (0, 1), 'stretch_fill': (0, 1),
+          'glow': (0, 1)}
 
 class Settings(dict):
     def __init__(self):

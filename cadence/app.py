@@ -15,6 +15,12 @@ from .providers import lyrics, word_lyrics, artwork
 from .settings import Settings, SUPPORT, LYRIC_STYLES, RANGES
 from .visuals import Renderer, color
 from .lockscreen import LockScreenSpace
+from .palette import album_palette, DEFAULT_ACCENT, DEFAULT_SECONDARY
+from .placement import snap_origin
+
+PRESETS = ('Custom', 'Wide lyrics', 'Square lyrics', 'Compact strip', 'Album card', 'Clock + lyrics')
+# Menu item tags; the status-bar and right-click menus are kept in step by tag.
+TAG_TRACK, TAG_LOCK, TAG_VISIBLE, TAG_BARE, TAG_OFFSET = 1, 2, 3, 4, 5
 
 
 class DesktopPanel(A.NSPanel):
@@ -38,10 +44,14 @@ class LyricView(A.NSView):
     def mouseDown_(self, event):
         if not self.owner.settings['locked']:
             self.window().performWindowDragWithEvent_(event)
+            # Hold Option while dragging to place the widget freely.
+            if not event.modifierFlags() & A.NSEventModifierFlagOption:
+                self.owner.snapPosition()
             self.owner.savePosition()
 
     def rightMouseDown_(self, event):
-        self.owner.customize_(None)
+        self.owner.syncMenus()
+        A.NSMenu.popUpContextMenu_withEvent_forView_(self.owner.context_menu, event, self)
 
     def drawRect_(self, rect):
         if not hasattr(self, 'renderer'):
@@ -58,9 +68,14 @@ class Controller(A.NSObject):
         self.ai_status = ''
         self.ai_busy = False
         self.art = None
-        self.accent = '#A8BAFF'
+        self.art_at = 0
+        self.accent = DEFAULT_ACCENT
+        self.secondary = DEFAULT_SECONDARY
+        self.previewing = False
+        self.animate_until = 0
         self.events = queue.Queue()
         self.stop = threading.Event()
+        self.wake = threading.Event()
         self.pool = concurrent.futures.ThreadPoolExecutor(max_workers=3, thread_name_prefix='lookup')
         self.pending = []
         self.hidden = False
@@ -90,6 +105,8 @@ class Controller(A.NSObject):
         center = F.NSDistributedNotificationCenter.defaultCenter()
         center.addObserver_selector_name_object_(self, 'screenLocked:', 'com.apple.screenIsLocked', None)
         center.addObserver_selector_name_object_(self, 'screenUnlocked:', 'com.apple.screenIsUnlocked', None)
+        # Music announces play, pause and track changes; read it at once instead of waiting for the next poll.
+        center.addObserver_selector_name_object_(self, 'musicChanged:', 'com.apple.Music.playerInfo', None)
         workspace = A.NSWorkspace.sharedWorkspace().notificationCenter()
         workspace.addObserver_selector_name_object_(self, 'screenSleep:', A.NSWorkspaceScreensDidSleepNotification, None)
         workspace.addObserver_selector_name_object_(self, 'screenWake:', A.NSWorkspaceScreensDidWakeNotification, None)
@@ -146,14 +163,89 @@ class Controller(A.NSObject):
         image = A.NSImage.imageWithSystemSymbolName_accessibilityDescription_('waveform', 'Cadence')
         image.setTemplate_(True)
         self.status_item.button().setImage_(image)
+        self.menu = self.buildMenu()
+        self.context_menu = self.buildMenu()
+        self.status_item.setMenu_(self.menu)
+        self.syncMenus()
+
+    @objc.python_method
+    def buildMenu(self):
         menu = A.NSMenu.alloc().init()
-        self.track_item = A.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_('Cadence · Apple Music', None, '')
-        menu.addItem_(self.track_item)
-        for title, action, key in [('Customize…', 'customize:', ','), ('Lock / unlock position', 'toggleLock:', ''), ('Center widget', 'center:', ''), ('Show / hide widget', 'toggleVisible:', ''), ('Refresh lyrics', 'refresh:', 'r'), ('Lyrics earlier (+100 ms)', 'earlier:', ''), ('Lyrics later (−100 ms)', 'later:', ''), ('Toggle lyrics only', 'lyricsOnly:', ''), ('Open Apple Music', 'openMusic:', ''), ('Quit Cadence', 'quit:', 'q')]:
+        def add(parent, title, action, key='', tag=0):
             item = A.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(title, action, key)
             item.setTarget_(self)
-            menu.addItem_(item)
-        self.status_item.setMenu_(menu)
+            item.setTag_(tag)
+            parent.addItem_(item)
+            return item
+        add(menu, 'Cadence · Apple Music', None, '', TAG_TRACK)
+        menu.addItem_(A.NSMenuItem.separatorItem())
+        add(menu, 'Customize…', 'customize:', ',')
+        for title, action, options in [('Lyric style', 'pickStyle:', LYRIC_STYLES), ('Widget layout', 'pickPreset:', PRESETS)]:
+            submenu = A.NSMenu.alloc().init()
+            for option in options:
+                add(submenu, option, action)
+            add(menu, title, None).setSubmenu_(submenu)
+        add(menu, 'Lyrics only', 'lyricsOnly:', '', TAG_BARE)
+        menu.addItem_(A.NSMenuItem.separatorItem())
+        add(menu, 'Refresh lyrics', 'refresh:', 'r')
+        add(menu, 'Lyrics earlier (+100 ms)', 'earlier:')
+        add(menu, 'Lyrics later (−100 ms)', 'later:')
+        add(menu, 'Timing offset', None, '', TAG_OFFSET)
+        menu.addItem_(A.NSMenuItem.separatorItem())
+        add(menu, 'Lock position', 'toggleLock:', '', TAG_LOCK)
+        add(menu, 'Center widget', 'center:')
+        add(menu, 'Show widget', 'toggleVisible:', '', TAG_VISIBLE)
+        menu.addItem_(A.NSMenuItem.separatorItem())
+        add(menu, 'Open Apple Music', 'openMusic:')
+        add(menu, 'Quit Cadence', 'quit:', 'q')
+        menu.setDelegate_(self)
+        return menu
+
+    @objc.python_method
+    def syncMenus(self):
+        """Checkmarks and labels always show the current state in both menus."""
+        if not hasattr(self, 'context_menu'):
+            return
+        s, track = self.settings, self.playback.track
+        title = (track.title+' — '+track.artist)[:90] if track.title else 'Cadence · Nothing playing'
+        for menu in (self.menu, self.context_menu):
+            for item in menu.itemArray():
+                tag = item.tag()
+                if tag == TAG_TRACK:
+                    item.setTitle_(title)
+                elif tag == TAG_LOCK:
+                    item.setState_(int(s['locked']))
+                elif tag == TAG_VISIBLE:
+                    item.setState_(int(not self.hidden))
+                elif tag == TAG_BARE:
+                    item.setState_(int(s['layout'] == 'Lyrics only'))
+                elif tag == TAG_OFFSET:
+                    item.setTitle_(f"Timing offset {s['offset']:+.2f} s")
+                submenu = item.submenu()
+                if submenu is not None:
+                    for child in submenu.itemArray():
+                        child.setState_(int(str(child.title()) in (s['lyric_style'], s['widget_preset'])))
+
+    def menuNeedsUpdate_(self, menu):
+        self.syncMenus()
+
+    @objc.python_method
+    def snapPosition(self):
+        screen = self.panel.screen() or A.NSScreen.mainScreen()
+        area, frame = screen.visibleFrame(), self.panel.frame()
+        origin = (frame.origin.x, frame.origin.y)
+        size = (frame.size.width, frame.size.height)
+        target = snap_origin(origin, size, (area.origin.x, area.origin.y, area.size.width, area.size.height))
+        if target != origin:
+            self.panel.setFrame_display_animate_((target, size), True, True)
+
+    @objc.python_method
+    def touched(self):
+        """A setting changed: keep animating briefly so colour and layout changes ease in."""
+        self.redraw = True
+        self.animate_until = time.monotonic()+1.5
+        self.syncMenus()
+        self.view.setNeedsDisplay_(True)
 
     @objc.python_method
     def poll(self):
@@ -168,7 +260,8 @@ class Controller(A.NSObject):
                         self.events.put(('track', reader.read()))
                 except Exception as exc:
                     self.events.put(('error', str(exc)))
-                self.stop.wait(.35)
+                self.wake.wait(.35)
+                self.wake.clear()
 
     @objc.python_method
     def requestAssets(self):
@@ -198,26 +291,33 @@ class Controller(A.NSObject):
             future.add_done_callback(done)
             self.pending.append(future)
 
-    def tick_(self, timer):
-        changed = False
-        while not self.events.empty():
-            event = self.events.get_nowait()
+    @objc.python_method
+    def drain(self):
+        """Apply queued results. Runs every frame, so a pause, seek or new song shows at once."""
+        changed = lively = False
+        while True:
+            try:
+                event = self.events.get_nowait()
+            except queue.Empty:
+                break
             kind = event[0]
             if kind == 'track':
                 track = event[1]
+                lively = lively or track.playing != self.playback.track.playing
                 if self.playback.update(track):
                     self.art = None
-                    self.accent = '#A8BAFF'
                     self.requestAssets()
+                    self.syncMenus()
+                    lively = True
                     logging.info('Track changed; generation=%d', self.playback.generation)
                 self.status = 'Play a song in Apple Music'
-                self.track_item.setTitle_((track.title+' — '+track.artist)[:90] if track.title else 'Cadence · Nothing playing')
                 changed = True
             elif kind == 'error':
                 self.status = event[1]
                 if self.playback.update(Track()):
                     self.art = None
                     self.loading = False
+                    self.syncMenus()
                 changed = True
             elif kind == 'ai':
                 self.ai_busy = False
@@ -234,27 +334,52 @@ class Controller(A.NSObject):
                         self.playback.accept(event[1], *event[2])
                     self.loading = not self.playback.lines and self.pending_lyrics > 0
                     logging.info('Lyrics ready; lines=%d; %s', len(self.playback.lines), self.playback.source)
-                elif kind == 'art' and event[2]:
-                    self.art = A.NSImage.alloc().initWithData_(F.NSData.dataWithBytes_length_(event[2], len(event[2])))
-                    bitmap = A.NSBitmapImageRep.imageRepWithData_(F.NSData.dataWithBytes_length_(event[2], len(event[2])))
-                    if bitmap:
-                        samples = []
-                        for x, y in [(.2, .2), (.5, .5), (.8, .3), (.3, .8)]:
-                            c = bitmap.colorAtX_y_(int(bitmap.pixelsWide()*x), int(bitmap.pixelsHigh()*y)).colorUsingColorSpace_(A.NSColorSpace.deviceRGBColorSpace())
-                            if c:
-                                rgb = [c.redComponent(), c.greenComponent(), c.blueComponent()]
-                                samples.append(rgb)
-                        if samples:
-                            rgb = max(samples, key=lambda v: max(v)-min(v))
-                            rgb = [.4+.6*v for v in rgb]
-                            self.accent = '#'+''.join(f'{int(v*255):02X}' for v in rgb)
-                changed = True
+                elif kind == 'art':
+                    self.showArtwork(event[2])
+                changed = lively = True
+        if changed:
+            self.redraw = True
+        if lively:
+            self.animate_until = time.monotonic()+1.5
+        return changed
+
+    @objc.python_method
+    def showArtwork(self, data):
+        """The previous song's colours stay until this arrives, then glide to the new ones."""
+        self.accent, self.secondary = DEFAULT_ACCENT, DEFAULT_SECONDARY
+        if not data:
+            return
+        payload = F.NSData.dataWithBytes_length_(data, len(data))
+        self.art = A.NSImage.alloc().initWithData_(payload)
+        self.art_at = time.monotonic()
+        bitmap = A.NSBitmapImageRep.imageRepWithData_(payload)
+        if not bitmap:
+            return
+        samples = []
+        wide, high = bitmap.pixelsWide(), bitmap.pixelsHigh()
+        space = A.NSColorSpace.deviceRGBColorSpace()
+        for column in range(10):
+            for row in range(10):
+                c = bitmap.colorAtX_y_(int(wide*(column+.5)/10), int(high*(row+.5)/10))
+                c = c.colorUsingColorSpace_(space) if c else None
+                if c:
+                    samples.append((c.redComponent(), c.greenComponent(), c.blueComponent()))
+        self.accent, self.secondary = album_palette(samples)
+
+    def musicChanged_(self, note):
+        self.wake.set()
+
+    def tick_(self, timer):
+        self.drain()
         now = time.monotonic()
         if self.dirty_at is not None and now-self.dirty_at > .4:
             self.settings.save()
             self.dirty_at = None
-        self.redraw = self.redraw or changed
         self.refreshVisibility()
+        previewing = bool(self.preferences and self.preferences.isVisible() and not self.playback.track.title)
+        if previewing != self.previewing:
+            self.previewing = previewing
+            self.redraw = True
         if self.render_active.is_set():
             if self.assets_needed:
                 self.requestAssets()
@@ -263,6 +388,8 @@ class Controller(A.NSObject):
                 view.renderer.prewarm(self, view.bounds())
         if self.preferences and self.preferences.isVisible():
             connection = ('Connected to Apple Music · '+self.playback.track.title) if self.playback.track.title else self.status
+            if self.previewing:
+                connection = 'Nothing playing · the widget is previewing your settings'
             self.connection_label.setStringValue_(connection if self.render_active.is_set() else 'Widget paused while covered · show your desktop to resume')
             self.source_label.setStringValue_(self.playback.source or 'Play a song to check lyric timing')
             self.ai_label.setStringValue_(self.ai_status or 'Uses the on-device Apple Intelligence model only on request.')
@@ -317,8 +444,11 @@ class Controller(A.NSObject):
     def frame_(self, link):
         if not self.render_active.is_set():
             return
+        if not self.events.empty():
+            self.drain()
         view = self.lock_view if self.locked else self.view
-        if view and (self.redraw or self.playback.track.playing):
+        preview = self.previewing and not self.locked
+        if view and (self.redraw or self.playback.track.playing or preview or time.monotonic() < self.animate_until):
             view.setNeedsDisplay_(True)
             view.displayIfNeeded()
             self.redraw = False
@@ -404,6 +534,7 @@ class Controller(A.NSObject):
         else:
             self.panel.orderFrontRegardless()
         self.refreshVisibility()
+        self.syncMenus()
 
     def toggleLock_(self, sender):
         self.settings['locked'] = not self.settings['locked']
@@ -411,6 +542,21 @@ class Controller(A.NSObject):
         self.settings.save()
         if 'locked' in self.controls:
             self.controls['locked'].setState_(int(self.settings['locked']))
+        self.syncMenus()
+
+    def pickStyle_(self, sender):
+        self.settings['lyric_style'] = str(sender.title())
+        if 'lyric_style' in self.controls:
+            self.controls['lyric_style'].selectItemWithTitle_(self.settings['lyric_style'])
+        self.settings.save(); self.touched()
+
+    def pickPreset_(self, sender):
+        if self.preferences is None:
+            self.buildPreferences()
+        self.settings['widget_preset'] = str(sender.title())
+        self.controls['widget_preset'].selectItemWithTitle_(self.settings['widget_preset'])
+        self.applyPreset()
+        self.settings.save(); self.touched()
 
     def refresh_(self, sender):
         self.playback.generation += 1
@@ -426,6 +572,7 @@ class Controller(A.NSObject):
 
     def applicationShouldTerminate_(self, app):
         self.stop.set()
+        self.wake.set()
         self.render_active.set()
         self.bindFrames(None)
         self.dropLockPanel()
@@ -459,9 +606,9 @@ class Controller(A.NSObject):
         self.preferences.setTitle_('Cadence · Customize')
         self.preferences.center()
         content = self.preferences.contentView()
-        self.label(content, 'Give every word a little life.', 26, 654, 500, 23)
+        self.label(content, 'Give every word a little life.', 26, 654, 500, 23).setFont_(A.NSFont.boldSystemFontOfSize_(22))
         self.connection_label = self.label(content, self.status, 26, 615, 500, 11)
-        self.label(content, 'Desktop lyrics, exactly your way.', 26, 586, 500, 12)
+        self.label(content, 'Desktop lyrics, exactly your way. Changes show on the widget as you make them.', 26, 586, 500, 12).setTextColor_(A.NSColor.secondaryLabelColor())
         tabs = A.NSTabView.alloc().initWithFrame_(((18, 48), (514, 530)))
         content.addSubview_(tabs)
         panes = {}
@@ -483,9 +630,11 @@ class Controller(A.NSObject):
             control.setFrame_(((184, y), (212, 22))); control.setContinuous_(True)
             self.controls[key] = control; parent.addSubview_(control)
             self.controls[key+'_value'] = self.label(parent, self.formatValue(key), 406, y, 66, 11)
-        def checkbox(parent, key, title, y):
+        def checkbox(parent, key, title, y, tip=None):
             control = A.NSButton.checkboxWithTitle_target_action_(title, self, 'changed:')
             control.setFrame_(((16, y), (450, 22))); control.setState_(int(self.settings[key]))
+            if tip:
+                control.setToolTip_(tip)
             self.controls[key] = control; parent.addSubview_(control)
         def well(parent, key, title, y):
             self.label(parent, title, 16, y)
@@ -496,12 +645,15 @@ class Controller(A.NSObject):
         popup(effects, 'lyric_style', 'Lyric style', list(LYRIC_STYLES), 450)
         popup(effects, 'font', 'Typeface', ['SF Rounded', 'SF Pro', 'Avenir Next', 'Helvetica Neue', 'Georgia', 'Courier'], 410)
         popup(effects, 'alignment', 'Alignment', ['Left', 'Center', 'Right'], 370)
-        for key, title, y in [('font_size', 'Lyric size', 325), ('pop_amount', 'Pop strength', 285), ('animation_speed', 'Animation speed', 245), ('line_spacing', 'Line spacing', 205), ('ransom_chaos', 'Cutout variation', 170), ('stretch_fill', 'Stretch to fill', 136)]:
+        self.controls['font'].setToolTip_('Ransom Note uses its own collage of mixed typefaces.')
+        for key, title, y in [('font_size', 'Lyric size', 330), ('pop_amount', 'Pop strength', 296), ('glow', 'Glow', 262), ('animation_speed', 'Animation speed', 228), ('line_spacing', 'Line spacing', 194), ('ransom_chaos', 'Cutout variation', 160), ('stretch_fill', 'Stretch to fill', 126)]:
             slider(effects, key, title, y)
-        checkbox(effects, 'motion', 'Animate words and background', 100)
-        checkbox(effects, 'scroll_lines', 'Scroll smoothly between lyric lines', 70)
-        checkbox(effects, 'show_neighbors', 'Show surrounding lyrics', 40)
-        self.label(effects, 'Ransom Note uses its own collage of mixed typefaces.', 16, 14, 460, 11)
+        self.controls['pop_amount'].setToolTip_('How far each word springs past its size as it is sung.')
+        self.controls['glow'].setToolTip_('Soft light around the word being sung, in Kinetic Word, Spotlight and Neon.')
+        checkbox(effects, 'motion', 'Animate words and background', 94)
+        checkbox(effects, 'sparks', 'Sparks on each new word (Kinetic Word)', 70, 'A short burst from the edge of each word. Scales with Pop strength.')
+        checkbox(effects, 'scroll_lines', 'Scroll smoothly between lyric lines', 46)
+        checkbox(effects, 'show_neighbors', 'Show surrounding lyrics', 22)
         layout = panes['Layout']
         popup(layout, 'layout', 'Display', ['Full widget', 'Lyrics only'], 450)
         popup(layout, 'style', 'Backdrop', ['Aurora', 'Glass', 'Typography'], 410)
@@ -536,7 +688,7 @@ class Controller(A.NSObject):
         ai_button.setFrame_(((16, 64), (450, 32))); timing.addSubview_(ai_button)
         self.ai_label = self.label(timing, self.ai_status, 16, 24, 465, 10)
         widgets = panes['Widgets']
-        popup(widgets, 'widget_preset', 'Widget layout', ['Custom', 'Wide lyrics', 'Square lyrics', 'Compact strip', 'Album card', 'Clock + lyrics'], 450)
+        popup(widgets, 'widget_preset', 'Widget layout', list(PRESETS), 450)
         self.label(widgets, 'Presets resize this movable desktop widget.', 16, 398, 465, 12)
         self.label(widgets, 'Wide / Square: one large word that stretches to fit.', 16, 356, 465, 12)
         self.label(widgets, 'Compact strip: scrolling lyrics in a small horizontal card.', 16, 322, 465, 12)
@@ -544,7 +696,7 @@ class Controller(A.NSObject):
         self.label(widgets, 'Clock + lyrics: a clock above the active word.', 16, 254, 465, 12)
         self.label(widgets, 'Hidden widgets pause animation and Apple Music polling.', 16, 194, 465, 12)
         self.label(widgets, 'Network and AI work starts only while the widget is visible.', 16, 164, 465, 12)
-        self.label(content, 'Drag the widget to move it. Right-click it to customize.', 26, 15, 500, 11)
+        self.label(content, 'Drag to move · snaps to edges (hold ⌥ to place freely) · right-click for the menu', 26, 15, 500, 11).setTextColor_(A.NSColor.secondaryLabelColor())
 
     def refineAI_(self, sender):
         if self.ai_busy:
@@ -595,7 +747,7 @@ class Controller(A.NSObject):
         if 'offset' in self.controls:
             self.controls['offset'].setDoubleValue_(self.settings['offset'])
             self.controls['offset_value'].setStringValue_(self.formatValue('offset'))
-        self.settings.save(); self.view.setNeedsDisplay_(True)
+        self.settings.save(); self.touched()
 
     def earlier_(self, sender):
         self.setOffset(self.settings['offset']+.1)
@@ -610,18 +762,18 @@ class Controller(A.NSObject):
         self.settings['layout'] = 'Full widget' if self.settings['layout'] == 'Lyrics only' else 'Lyrics only'
         if 'layout' in self.controls:
             self.controls['layout'].selectItemWithTitle_(self.settings['layout'])
-        self.settings.save(); self.view.setNeedsDisplay_(True)
+        self.settings.save(); self.touched()
 
     @objc.python_method
     def formatValue(self, key):
         value = self.settings[key]
-        return f'{value:+.2f}' if key == 'offset' else f'{value:.0%}' if key in ('opacity', 'text_opacity', 'context_opacity', 'pop_amount', 'ransom_chaos', 'stretch_fill') else f'{value:.1f}×' if key in ('animation_speed', 'line_spacing') else str(int(value))
+        return f'{value:+.2f}' if key == 'offset' else f'{value:.0%}' if key in ('opacity', 'text_opacity', 'context_opacity', 'pop_amount', 'ransom_chaos', 'stretch_fill', 'glow') else f'{value:.1f}×' if key in ('animation_speed', 'line_spacing') else str(int(value))
 
     def changed_(self, sender):
         key = next((k for k, v in self.controls.items() if v == sender), None)
         if key in ('style', 'font', 'lyric_style', 'alignment', 'layout', 'widget_preset'):
             self.settings[key] = str(sender.titleOfSelectedItem())
-        elif key in ('locked', 'auto_color', 'motion', 'show_art', 'show_title', 'show_progress', 'show_time', 'show_source', 'show_neighbors', 'scroll_lines', 'lock_screen'):
+        elif key in ('locked', 'auto_color', 'motion', 'show_art', 'show_title', 'show_progress', 'show_time', 'show_source', 'show_neighbors', 'scroll_lines', 'lock_screen', 'sparks'):
             self.settings[key] = bool(sender.state())
         elif key in ('accent', 'text_color'):
             c = sender.color().colorUsingColorSpace_(A.NSColorSpace.deviceRGBColorSpace())
@@ -641,9 +793,8 @@ class Controller(A.NSObject):
             self.savePosition()
         if key == 'lock_screen' and self.locked:
             self.dropLockPanel(); self.screenLocked_(None)
-        self.redraw = True
         self.dirty_at = time.monotonic()
-        self.view.setNeedsDisplay_(True)
+        self.touched()
 
 
 def run():
